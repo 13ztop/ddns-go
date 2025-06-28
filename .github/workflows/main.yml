@@ -32,7 +32,7 @@ jobs:
       # 请确保将 DDNS_GO_PAT 替换为您在 Secrets 中设置的实际密钥名称。
       - name: Clone ddns-go repository
         run: |
-          git clone https://${{ secrets.DDNS_GO_PAT }}@github.com/474706852/ddns-go.git ddns-go-temp
+          git clone https://${{ secrets.ddnsgo }}@github.com/474706852/ddns-go.git ddns-go-temp
 
       # 步骤3: Sync files (customize this step)
       # 这是核心同步逻辑所在。您需要根据您的具体需求修改此步骤。
