@@ -1,0 +1,36 @@
+name: Sync ddns-go
+
+on:
+  schedule:
+    # 每天协调世界时（UTC）00:00运行，即北京时间早上8点
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+
+      - name: Clone ddns-go repository
+        run: |
+          git clone https://github.com/474706852/ddns-go.git ddns-go-temp
+
+      - name: Sync files (customize this step )
+        run: |
+          # 在这里编写您的同步逻辑。
+          # 示例1：将ddns-go-temp目录下的所有文件复制到当前仓库的根目录
+          cp -r ddns-go-temp/* .
+          # 示例2：如果您只想同步特定文件或目录，可以使用rsync或其他命令
+          # rsync -av ddns-go-temp/path/to/source/ ./
+
+      - name: Commit and push changes
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -m "Sync ddns-go changes" || echo "No changes to commit"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
