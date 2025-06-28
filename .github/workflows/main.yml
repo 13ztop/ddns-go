@@ -43,7 +43,7 @@ jobs:
           echo "开始同步文件..."
           # 示例1：将 ddns-go-temp 目录下的所有文件复制到当前仓库的根目录。
           # 这会覆盖当前仓库中与 ddns-go-temp 同名的文件。
-          cp -rf ddns-go-temp/* .
+          cp -rf ddns-go/* .
           echo "文件同步完成。"
 
           # 示例2：如果您只想同步特定文件或目录，可以使用 rsync 或其他命令。
