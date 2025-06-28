@@ -1,30 +1,67 @@
 name: Sync ddns-go
 
+# on: 定义了工作流的触发事件。
+# schedule: 用于设置定时任务。cron 表达式定义了任务的运行频率和时间。
+# workflow_dispatch: 允许您手动从 GitHub Actions 界面触发此工作流，方便测试和即时同步。
 on:
   schedule:
-    # 每天协调世界时（UTC）00:00运行，即北京时间早上8点
+    # cron 表达式格式：秒 分 时 日 月 周
+    # 例如：0 0 * * * 表示每天协调世界时（UTC）00:00运行。
+    # UTC 00:00 对应北京时间（UTC+8）早上 8:00。
+    # 如果您想在北京时间每天凌晨 2:00 运行，cron 表达式应为：0 18 * * * (因为 2:00 - 8小时 = 前一天 18:00 UTC)
     - cron: '0 0 * * *'
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
 
+# jobs: 定义了工作流中要执行的一系列任务。
 jobs:
   sync:
+    # runs-on: 指定了运行此任务的虚拟机环境。ubuntu-latest 是一个常用的 Linux 环境。
     runs-on: ubuntu-latest
+    # steps: 定义了任务中要执行的各个步骤。
     steps:
+      # 步骤1: Checkout current repository
+      # 使用 actions/checkout@v4 动作来克隆当前 GitHub Actions 运行所在的仓库。
+      # 这是为了让工作流能够访问和修改您自己的仓库文件。
       - name: Checkout current repository
         uses: actions/checkout@v4
 
+      # 步骤2: Clone ddns-go repository
+      # 克隆目标外部仓库（ddns-go）。
+      # 注意：这里使用了之前创建的 PAT 来进行认证，以解决权限问题。
+      # ${{ secrets.DDNS_GO_PAT }} 会在运行时被替换为您在 Secrets 中存储的实际 PAT 值。
+      # 请确保将 DDNS_GO_PAT 替换为您在 Secrets 中设置的实际密钥名称。
       - name: Clone ddns-go repository
         run: |
-          git clone https://github.com/474706852/ddns-go.git ddns-go-temp
+          git clone https://${{ secrets.DDNS_GO_PAT }}@github.com/474706852/ddns-go.git ddns-go-temp
 
-      - name: Sync files (customize this step )
+      # 步骤3: Sync files (customize this step)
+      # 这是核心同步逻辑所在。您需要根据您的具体需求修改此步骤。
+      # ddns-go-temp 目录包含了克隆下来的 ddns-go 仓库内容。
+      # 您可以将 ddns-go-temp 中的文件复制到当前仓库的根目录或指定子目录。
+      - name: Sync files (customize this step)
         run: |
-          # 在这里编写您的同步逻辑。
-          # 示例1：将ddns-go-temp目录下的所有文件复制到当前仓库的根目录
-          cp -r ddns-go-temp/* .
-          # 示例2：如果您只想同步特定文件或目录，可以使用rsync或其他命令
-          # rsync -av ddns-go-temp/path/to/source/ ./
+          echo "开始同步文件..."
+          # 示例1：将 ddns-go-temp 目录下的所有文件复制到当前仓库的根目录。
+          # 这会覆盖当前仓库中与 ddns-go-temp 同名的文件。
+          cp -rf ddns-go-temp/* .
+          echo "文件同步完成。"
 
+          # 示例2：如果您只想同步特定文件或目录，可以使用 rsync 或其他命令。
+          # rsync -av ddns-go-temp/path/to/source/ ./
+          # 例如，只同步 ddns-go 仓库中的 README.md 文件：
+          # cp ddns-go-temp/README.md .
+
+          # 示例3：如果您希望删除当前仓库中不再存在于 ddns-go-temp 中的文件，可以使用 rsync 的 --delete 选项。
+          # 请谨慎使用此选项，因为它会删除文件！
+          # rsync -av --delete ddns-go-temp/ ./
+
+      # 步骤4: Commit and push changes
+      # 将同步后的更改提交到您的仓库并推送到 GitHub。
+      # git config user.name 和 user.email 用于设置提交者的信息。
+      # git add . 添加所有更改到暂存区。
+      # git commit -m "..." 提交更改。如果没有任何更改，|| echo "No changes to commit" 会防止命令失败。
+      # git push 将更改推送到远程仓库。
+      # GITHUB_TOKEN 是 GitHub Actions 自动提供的，用于当前仓库的认证。
       - name: Commit and push changes
         run: |
           git config user.name github-actions
