@@ -26,15 +26,13 @@ jobs:
         uses: actions/checkout@v4
 
       # 步骤2: Clone ddns-go repository
-      # 克隆目标外部仓库（ddns-go）到当前工作目录的根目录。
-      # 注意：此方法会将 ddns-go 仓库的内容直接放置在您自己的仓库根目录，
-      # 这意味着您自己的仓库文件（例如 .github/workflows 目录）可能会被覆盖。
-      # 您需要确保在后续步骤中妥善处理您自己的仓库文件，例如在克隆 ddns-go 之前备份或移动它们。
+      # 克隆目标外部仓库（ddns-go）。
+      # 注意：这里使用了之前创建的 PAT 来进行认证，以解决权限问题。
       # ${{ secrets.DDNS_GO_PAT }} 会在运行时被替换为您在 Secrets 中存储的实际 PAT 值。
       # 请确保将 DDNS_GO_PAT 替换为您在 Secrets 中设置的实际密钥名称。
       - name: Clone ddns-go repository
         run: |
-          git clone https://${{ secrets.ddnsgo }}@github.com/474706852/ddns-go.git .
+          git clone https://${{ secrets.ddnsgo }}@github.com/474706852/ddns-go.git ddns-go-temp
 
       # 步骤3: Sync files (customize this step)
       # 这是核心同步逻辑所在。您需要根据您的具体需求修改此步骤。
