@@ -9,7 +9,7 @@ env:
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
   GITHUB_WORKSPACE: ${{ github.workspace }}
-  REPO_URL: "https://github.com/13ztop/ddns-go"  # 目标仓库URL
+  REPO_URL: "https://github.com/13ztop/ddns-go"
 
 jobs:
   sync:
@@ -31,7 +31,7 @@ jobs:
       run: |
         git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
         
-    # 4. 安全同步（保留.git目录）
+    # 4. 安全同步
     - name: Sync repositories
       run: |
         rsync -a --delete \
@@ -46,13 +46,13 @@ jobs:
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         
-    # 6. 详细变更检测
+    # 6. 变更检测
     - name: Detect changes
       id: detect_changes
       run: |
         cd target-repo
         
-        # 获取变更状态（按类型分类）
+        # 获取变更状态
         git add -A
         changes=$(git status --porcelain)
         
@@ -68,9 +68,6 @@ jobs:
           deleted_files=$(echo "$changes" | grep '^ D' | cut -c4-)
           
           # 保存变更列表
-          echo "$changes" | cut -c4- > $GITHUB_WORKSPACE/all_changed_files.txt
-          
-          # 保存各类变更
           echo "$added_files" > $GITHUB_WORKSPACE/added_files.txt
           echo "$modified_files" > $GITHUB_WORKSPACE/modified_files.txt
           echo "$deleted_files" > $GITHUB_WORKSPACE/deleted_files.txt
@@ -82,53 +79,20 @@ jobs:
           echo "  ❌ 删除: $(echo "$deleted_files" | wc -l)"
         fi
         
-    # 7. 生成详细提交信息
-    - name: Prepare commit message
-      id: prepare_commit
-      if: steps.detect_changes.outputs.has_changes == 'true'
-      run: |
-        # 读取各类变更文件
-        added_files=$(cat $GITHUB_WORKSPACE/added_files.txt)
-        modified_files=$(cat $GITHUB_WORKSPACE/modified_files.txt)
-        deleted_files=$(cat $GITHUB_WORKSPACE/deleted_files.txt)
-        
-        # 生成Markdown格式的提交信息
-        commit_msg="安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')\n\n"
-        
-        if [ -n "$added_files" ]; then
-          commit_msg+="### ➕ 新增文件\n"
-          commit_msg+="$(echo "$added_files" | sed 's/^/- /')\n\n"
-        fi
-        
-        if [ -n "$modified_files" ]; then
-          commit_msg+="### ✏️ 修改文件\n"
-          commit_msg+="$(echo "$modified_files" | sed 's/^/- /')\n\n"
-        fi
-        
-        if [ -n "$deleted_files" ]; then
-          commit_msg+="### ❌ 删除文件\n"
-          commit_msg+="$(echo "$deleted_files" | sed 's/^/- /')\n\n"
-        fi
-        
-        # 保存到环境变量
-        echo "COMMIT_MSG<<EOF" >> $GITHUB_ENV
-        echo -e "$commit_msg" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
-        
-        # 显示预览
-        echo "📝 提交信息预览:"
-        echo -e "$commit_msg"
-        
-    # 8. 提交变更
+    # 7. 提交变更
     - name: Commit changes
       if: steps.detect_changes.outputs.has_changes == 'true'
       run: |
         cd target-repo
         git add -A
-        git commit -m "$(echo -e "${{ env.COMMIT_MSG }}" | head -n 1)" -m "$(echo -e "${{ env.COMMIT_MSG }}" | tail -n +2)"
-        echo "💾 变更已提交"
         
-    # 9. 推送变更
+        # 生成提交消息
+        commit_msg="安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')"
+        
+        # 提交变更
+        git commit -m "$commit_msg"
+        
+    # 8. 推送变更
     - name: Push changes
       if: steps.detect_changes.outputs.has_changes == 'true'
       run: |
@@ -136,97 +100,76 @@ jobs:
         git push origin main
         echo "🚀 变更已推送"
         
-    # 10. 详细Telegram通知（带文件链接）
-    - name: Send detailed Telegram notification
+    # 9. 修复的Telegram通知（解决中文乱码问题）
+    - name: Send Telegram notification
       if: always() && env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
       run: |
+        # 设置字符编码
+        export LC_ALL=en_US.UTF-8
+        export LANG=en_US.UTF-8
+        
         # 基础消息
-        status="🟢 *无变更*"
         if [ "${{ steps.detect_changes.outputs.has_changes }}" = "true" ]; then
-          status="🚀 *同步完成*"
-        fi
-        
-        # 读取变更文件
-        added_files=$(cat $GITHUB_WORKSPACE/added_files.txt 2>/dev/null || true)
-        modified_files=$(cat $GITHUB_WORKSPACE/modified_files.txt 2>/dev/null || true)
-        deleted_files=$(cat $GITHUB_WORKSPACE/deleted_files.txt 2>/dev/null || true)
-        
-        # 生成Markdown格式的消息
-        message="*ddns-go 安全同步报告*%0A%0A"
-        message+="$status%0A"
-        message+="🕒 时间: $(date -u +'%Y-%m-%d %H:%M UTC')%0A"
-        message+="🔗 [工作流详情]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)%0A%0A"
-        
-        # 生成文件链接函数
-        generate_file_links() {
-          local files="$1"
-          local change_type="$2"
+          status="🚀 同步完成"
+          # 读取变更文件
+          added_files=$(cat $GITHUB_WORKSPACE/added_files.txt 2>/dev/null || true)
+          modified_files=$(cat $GITHUB_WORKSPACE/modified_files.txt 2>/dev/null || true)
+          deleted_files=$(cat $GITHUB_WORKSPACE/deleted_files.txt 2>/dev/null || true)
           
-          if [ -z "$files" ]; then
-            return
+          # 构建变更描述
+          changes_desc=""
+          if [ -n "$added_files" ]; then
+            changes_desc+="➕ 新增: $(echo "$added_files" | wc -l)个文件\n"
+          fi
+          if [ -n "$modified_files" ]; then
+            changes_desc+="✏️ 修改: $(echo "$modified_files" | wc -l)个文件\n"
+          fi
+          if [ -n "$deleted_files" ]; then
+            changes_desc+="❌ 删除: $(echo "$deleted_files" | wc -l)个文件\n"
           fi
           
-          # 添加变更标题
-          case $change_type in
-            added) message+="*➕ 新增文件:*%0A" ;;
-            modified) message+="*✏️ 修改文件:*%0A" ;;
-            deleted) message+="*❌ 删除文件:*%0A" ;;
-          esac
-          
-          # 添加文件列表（最多5个）
-          count=0
-          echo "$files" | while read -r file; do
-            if [ -n "$file" ]; then
-              count=$((count+1))
-              # 生成GitHub文件链接
-              file_url="${REPO_URL}/blob/main/${file}"
-              
-              # 对于删除文件使用不同格式
-              if [ "$change_type" = "deleted" ]; then
-                message+="• ~${file}~%0A"
-              else
-                message+="• [${file}]($file_url)%0A"
-              fi
-              
-              # 最多显示5个文件
-              if [ $count -ge 5 ]; then
-                break
-              fi
-            fi
-          done
-          
-          # 添加更多文件提示
-          total_count=$(echo "$files" | wc -l)
-          if [ $total_count -gt 5 ]; then
-            message+="• 等 $((total_count-5)) 个文件...%0A"
+          # 显示前3个变更文件
+          sample_changes=""
+          if [ -n "$added_files" ]; then
+            sample_changes+="新增: $(echo "$added_files" | head -3 | sed 's/^/- /')\n"
           fi
-          message+="%0A"
-        }
-        
-        # 添加各类变更
-        generate_file_links "$added_files" "added"
-        generate_file_links "$modified_files" "modified"
-        generate_file_links "$deleted_files" "deleted"
-        
-        # 添加变更统计
-        if [ "${{ steps.detect_changes.outputs.has_changes }}" = "true" ]; then
-          total_changes=$(( $(echo "$added_files" | wc -l) + $(echo "$modified_files" | wc -l) + $(echo "$deleted_files" | wc -l) ))
-          message+="*📊 变更统计:*%0A"
-          message+="• 新增: $(echo "$added_files" | wc -l)%0A"
-          message+="• 修改: $(echo "$modified_files" | wc -l)%0A"
-          message+="• 删除: $(echo "$deleted_files" | wc -l)%0A"
-          message+="• 总计: $total_changes 个文件%0A%0A"
+          if [ -n "$modified_files" ]; then
+            sample_changes+="修改: $(echo "$modified_files" | head -3 | sed 's/^/- /')\n"
+          fi
+          if [ -n "$deleted_files" ]; then
+            sample_changes+="删除: $(echo "$deleted_files" | head -3 | sed 's/^/- /')\n"
+          fi
+        else
+          status="🟢 无变更"
+          changes_desc=""
+          sample_changes=""
         fi
         
-        # 发送Telegram通知
+        # 创建消息文本文件（避免命令行编码问题）
+        cat << EOF > message.txt
+        *ddns-go 安全同步报告*
+        
+        ${status}
+        ${changes_desc}
+        🕒 时间: $(date -u +'%Y-%m-%d %H:%M UTC')
+        🔗 [工作流详情]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
+        
+        *变更示例:*
+        ${sample_changes}
+        EOF
+        
+        # 发送通知（使用文件输入避免编码问题）
         curl -s -X POST \
           "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
           -H "Content-Type: application/json" \
-          -d '{
-            "chat_id": "'"$TELEGRAM_CHAT_ID"'",
-            "text": "'"$message"'",
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": true
-          }'
+          -d @<(jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --rawfile text message.txt \
+            '{
+              chat_id: $chat_id,
+              text: $text,
+              parse_mode: "Markdown",
+              disable_web_page_preview: true
+            }')
         
         echo "📨 Telegram通知已发送"
