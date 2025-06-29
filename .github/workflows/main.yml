@@ -9,23 +9,53 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-    # 准备工作区
+    # 1. 准备工作区
     - name: Prepare workspace
       run: |
         rm -rf target-repo source-repo
         mkdir -p target-repo source-repo
     
-    # 克隆源仓库
+    # 2. 克隆源仓库
     - name: Clone source repository
       run: |
         git clone --depth=1 https://github.com/474706852/ddns-go.git source-repo
     
-    # 克隆目标仓库
+    # 3. 直接克隆目标仓库（使用完整克隆）
     - name: Clone target repository
       run: |
-        git clone --depth=1 "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
+        # 使用完整克隆代替浅克隆
+        git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
+        cd target-repo
+        git checkout main  # 确保检出正确分支
     
-    # 安全文件同步
+    # 4. 修复仓库状态（关键修复）
+    - name: Repair repository state
+      run: |
+        cd target-repo
+        
+        # 验证并修复HEAD引用
+        if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+          echo "⚠️ HEAD无效，尝试修复..."
+          
+          # 获取最新commit
+          latest_commit=$(git log -1 --format=%H)
+          
+          # 如果无法获取commit，尝试从远程获取
+          if [ -z "$latest_commit" ]; then
+            git fetch origin main
+            latest_commit=$(git rev-parse origin/main)
+          fi
+          
+          # 重置HEAD
+          echo $latest_commit > .git/HEAD
+        fi
+        
+        # 验证仓库完整性
+        git fsck --full || true
+        git reset --hard
+        git clean -f -d
+    
+    # 5. 安全文件同步
     - name: Safe file sync
       run: |
         cd source-repo
@@ -38,32 +68,38 @@ jobs:
         done
         echo "✅ 安全同步完成"
     
-    # 配置Git用户信息
+    # 6. 配置Git用户信息
     - name: Configure Git
       run: |
         cd target-repo
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
     
-    # 检查变更
+    # 7. 检查变更（使用低级Git命令）
     - name: Check for changes
       id: changes
       run: |
         cd target-repo
-        # 获取变更状态
-        git status --porcelain > changes.txt
-        change_count=$(wc -l < changes.txt | tr -d ' ')
+        
+        # 使用低级命令检测变更
+        git update-index -q --refresh
+        change_count=0
+        
+        # 检测工作区变更
+        if ! git diff-index --quiet HEAD --; then
+          change_count=$(git diff-index --name-only HEAD -- | wc -l | tr -d ' ')
+        fi
+        
         echo "has_changes=$change_count" >> $GITHUB_OUTPUT
         
-        # 设置变更报告
         if [ "$change_count" -gt 0 ]; then
           echo "📝 检测到变更 ($change_count 个文件)"
-          cat changes.txt
+          git diff-index --name-only HEAD --
         else
           echo "🟢 无变更检测到"
         fi
     
-    # 提交变更（仅在检测到变更时执行）
+    # 8. 提交变更（仅在检测到变更时执行）
     - name: Commit changes
       if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
@@ -72,7 +108,7 @@ jobs:
         git commit -m "安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')"
         echo "✅ 已提交 ${{ steps.changes.outputs.has_changes }} 个变更"
     
-    # 推送变更（仅在检测到变更时执行）
+    # 9. 推送变更（仅在检测到变更时执行）
     - name: Push changes
       if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
@@ -80,22 +116,16 @@ jobs:
         git push origin main
         echo "🚀 已成功推送变更到 GitHub"
     
-    # 最终状态报告（总是执行）
+    # 10. 最终状态报告
     - name: Final sync report
-      if: always()  # 无论前面步骤是否失败都执行
+      if: always()
       run: |
+        echo "::notice title=同步报告::🕒 同步完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+        
         if [ "${{ steps.changes.outputs.has_changes }}" == "0" ]; then
           echo "::notice title=同步报告::🟢 无变更需要推送 - 仓库已是最新状态"
         elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
           echo "::notice title=同步报告::🚀 已成功推送 ${{ steps.changes.outputs.has_changes }} 个变更"
         else
           echo "::warning title=同步报告::⚠️ 无法确定变更状态 - 请检查日志"
-        fi
-        
-        # 添加时间戳
-        echo "🕒 同步完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-        
-        # 添加工作流链接（仅在GitHub环境中）
-        if [ -n "$GITHUB_SERVER_URL" ]; then
-          echo "🔗 工作流详情: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
         fi
