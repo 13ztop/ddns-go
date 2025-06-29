@@ -2,41 +2,46 @@ name: Safe Sync ddns-go
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # 每天UTC时间0点运行
+  workflow_dispatch:     # 支持手动触发
 
 env:
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
   GITHUB_WORKSPACE: ${{ github.workspace }}
-  REPO_URL: "https://github.com/13ztop/ddns-go"
+  SOURCE_REPO_URL: "https://github.com/474706852/ddns-go"  # 源仓库URL
+  TARGET_REPO_URL: "https://github.com/13ztop/ddns-go"    # 目标仓库URL
+  SYNC_EXCLUDE: "--exclude='/.git' --exclude='/.github/workflows'"  # 同步排除项
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-    # 1. 准备工作区
+    # 1. 初始化工作区
     - name: Prepare workspace
       run: |
+        echo "🛠️ 初始化工作区..."
         rm -rf target-repo source-repo
         mkdir -p target-repo source-repo
         
     # 2. 克隆源仓库
     - name: Clone source repository
       run: |
-        git clone --depth=1 https://github.com/474706852/ddns-go.git source-repo
+        echo "⬇️ 克隆源仓库..."
+        git clone --depth=1 ${{ env.SOURCE_REPO_URL }}.git source-repo
         
     # 3. 克隆目标仓库
     - name: Clone target repository
       run: |
+        echo "⬇️ 克隆目标仓库..."
         git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
         
-    # 4. 安全同步
+    # 4. 安全同步目录
     - name: Sync repositories
       run: |
+        echo "🔄 同步文件..."
         rsync -a --delete \
-          --exclude='/.git' \
-          --exclude='/.github/workflows' \
+          ${{ env.SYNC_EXCLUDE }} \
           source-repo/ target-repo/
         
     # 5. 配置Git用户
@@ -52,6 +57,7 @@ jobs:
       run: |
         cd target-repo
         
+        # 获取变更状态
         git add -A
         changes=$(git status --porcelain)
         
@@ -61,7 +67,7 @@ jobs:
         else
           echo "has_changes=true" >> $GITHUB_OUTPUT
           
-          # 分类变更
+          # 分类变更文件
           added_files=$(echo "$changes" | grep '^A' | cut -c4-)
           modified_files=$(echo "$changes" | grep '^ M' | cut -c4-)
           deleted_files=$(echo "$changes" | grep '^ D' | cut -c4-)
@@ -88,7 +94,7 @@ jobs:
         cd target-repo
         git push origin main
         
-    # 9. 修复的Telegram通知
+    # 9. 增强的Telegram通知（添加仓库链接）
     - name: Send Telegram notification
       if: always() && env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
       run: |
@@ -139,6 +145,11 @@ jobs:
         # 创建完整的消息
         message="*📦 ddns-go 安全同步报告*\n\n"
         message+="${status}\n\n"
+        
+        # 添加仓库链接
+        message+="🌐 *仓库信息:*\n"
+        message+="- 源仓库: [${{ env.SOURCE_REPO_URL }}](${{ env.SOURCE_REPO_URL }})\n"
+        message+="- 目标仓库: [${{ env.TARGET_REPO_URL }}](${{ env.TARGET_REPO_URL }})\n\n"
         
         if [ -n "$changes_desc" ]; then
           message+="${changes_desc}\n"
