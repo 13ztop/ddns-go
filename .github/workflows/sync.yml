@@ -18,6 +18,13 @@ jobs:
         fetch-depth: 0
         ref: main
 
+    - name: Reset to origin/main
+      run: |
+        cd target-repo
+        git fetch origin
+        git reset --hard origin/main
+        echo "✅ 已重置到 origin/main"
+
     - name: Clone source ddns-go
       run: |
         git clone --depth 1 https://github.com/474706852/ddns-go.git source-repo
@@ -37,7 +44,10 @@ jobs:
       id: check-changes
       run: |
         cd target-repo
-        if git diff-index --quiet HEAD --; then
+        git add -A  # 确保所有更改都被暂存
+        
+        # 使用 git status 检测变更更可靠
+        if [ -z "$(git status --porcelain)" ]; then
           echo "changes_detected=false" >> $GITHUB_OUTPUT
           echo "🟢 未检测到变更"
         else
@@ -55,18 +65,18 @@ jobs:
         git commit -m "Auto-sync: Full update from 474706852/ddns-go @ $(date -u +'%Y-%m-%d %H:%M UTC')"
         echo "🔵 变更已提交"
 
-    - name: Push changes to 13ztop/ddns-go
+    - name: Force push changes
       if: steps.check-changes.outputs.changes_detected == 'true'
       run: |
         cd target-repo
-        git push origin main
-        echo "🚀 变更已推送到 13ztop/ddns-go"
+        git push origin main --force
+        echo "🚀 变更已强制推送到 13ztop/ddns-go"
 
     - name: Send Telegram notification
       uses: appleboy/telegram-action@v1.0.0
       with:
-        to: ${{ secrets.TELEGRAM_CHAT_ID }}  # 使用合法的Secret名称
-        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}  # 使用合法的Secret名称
+        to: ${{ secrets.TELEGRAM_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         message: |
           🚀 *ddns-go 同步完成*
           - 仓库: [13ztop/ddns-go](https://github.com/13ztop/ddns-go)
@@ -77,4 +87,4 @@ jobs:
         parse_mode: markdown
 
     - name: Cleanup
-      run: rm -rf source-repo  # 修正为正确的命令
+      run: rm -rf source-repo
