@@ -25,18 +25,28 @@ jobs:
       run: |
         git clone --depth=1 https://github.com/474706852/ddns-go.git source-repo
         
-    # 克隆目标仓库
+    # 克隆目标仓库（添加错误处理）
     - name: Clone target repository
       run: |
-        git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
+        if ! git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo; then
+          echo "::error::无法克隆目标仓库"
+          exit 1
+        fi
         
-    # 完整目录同步（排除.git和workflows）
-    - name: Sync directories
+    # 安全同步（保留.git目录）
+    - name: Safe sync
       run: |
+        # 使用rsync但排除.git目录
         rsync -a --delete \
           --exclude='/.git' \
           --exclude='/.github/workflows' \
           source-repo/ target-repo/
+        
+        # 验证.git目录存在
+        if [ ! -d "target-repo/.git" ]; then
+          echo "::error::目标仓库.git目录丢失"
+          exit 1
+        fi
         
     # 配置Git用户
     - name: Configure Git
@@ -45,21 +55,31 @@ jobs:
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         
-    # 检测真实变更
+    # 改进的变更检测
     - name: Check changes
       id: check_changes
       run: |
         cd target-repo
-        # 获取有效变更（排除.gitignore变更）
-        changes=$(git status --porcelain | grep -v '.gitignore')
+        
+        # 确保在Git仓库中
+        if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          echo "::error::不在Git仓库中"
+          exit 1
+        fi
+        
+        # 获取变更状态
+        git add -A
+        changes=$(git diff --cached --name-only)
         
         if [ -z "$changes" ]; then
           echo "has_changes=0" >> $GITHUB_OUTPUT
-          echo "🟢 未检测到有效变更"
+          echo "🟢 未检测到变更"
         else
           echo "has_changes=1" >> $GITHUB_OUTPUT
           echo "📝 检测到变更："
-          git diff --stat
+          echo "$changes" | sed 's/^/• /'
+          # 保存变更列表
+          echo "$changes" | tr '\n' ',' > $GITHUB_WORKSPACE/changed_files.txt
         fi
         
     # 提交变更
@@ -75,11 +95,14 @@ jobs:
       if: steps.check_changes.outputs.has_changes == '1'
       run: |
         cd target-repo
-        git push origin main
+        if ! git push origin main; then
+          echo "::error::推送失败"
+          exit 1
+        fi
         echo "🚀 变更已推送"
         
-    # Telegram通知（保持原逻辑）
+    # Telegram通知
     - name: Send Telegram notification
       if: always() && env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
       run: |
-        # 保持原通知逻辑...
+        # ... [保留原有通知逻辑] ...
