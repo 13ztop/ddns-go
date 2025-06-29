@@ -2,58 +2,86 @@ name: Safe Sync ddns-go
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # 每天UTC时间0点运行
+  workflow_dispatch:     # 支持手动触发
 
 env:
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
   GITHUB_WORKSPACE: ${{ github.workspace }}
-  REPO_URL: "https://github.com/13ztop/ddns-go"
+  REPO_URL: "https://github.com/13ztop/ddns-go"  # 目标仓库URL
+  SYNC_EXCLUDE: "--exclude='/.git' --exclude='/.github/workflows'"  # 同步排除项
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-    # 1. 准备工作区
+    # 1. 初始化工作区
     - name: Prepare workspace
       run: |
+        echo "🛠️ 初始化工作区..."
         rm -rf target-repo source-repo
         mkdir -p target-repo source-repo
+        echo "工作区目录结构:"
+        ls -la
         
     # 2. 克隆源仓库
     - name: Clone source repository
       run: |
+        echo "⬇️ 克隆源仓库..."
         git clone --depth=1 https://github.com/474706852/ddns-go.git source-repo
+        echo "源仓库内容:"
+        ls -la source-repo | head -5
         
     # 3. 克隆目标仓库
     - name: Clone target repository
       run: |
+        echo "⬇️ 克隆目标仓库..."
+        set -x  # 开启详细输出
         git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
+        set +x
         
-    # 4. 安全同步
+        echo "目标仓库验证:"
+        ls -la target-repo/.git || echo "❌ 目标仓库.git目录不存在"
+        
+    # 4. 安全同步目录
     - name: Sync repositories
       run: |
+        echo "🔄 同步文件..."
         rsync -a --delete \
-          --exclude='/.git' \
-          --exclude='/.github/workflows' \
+          ${{ env.SYNC_EXCLUDE }} \
           source-repo/ target-repo/
+        
+        echo "同步后目标仓库内容:"
+        ls -la target-repo | head -5
         
     # 5. 配置Git用户
     - name: Configure Git
       run: |
         cd target-repo
+        echo "⚙️ 配置Git用户..."
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
+        echo "当前Git配置:"
+        git config --list
         
-    # 6. 变更检测
-    - name: Detect changes
+    # 6. 变更检测与分类
+    - name: Detect and classify changes
       id: detect_changes
       run: |
         cd target-repo
         
-        # 获取变更状态
+        # 验证Git仓库状态
+        if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          echo "::error::❌ 错误：不在Git仓库中"
+          exit 1
+        fi
+        
+        echo "🔍 检测变更..."
+        # 添加所有文件到暂存区
         git add -A
+        
+        # 获取变更状态
         changes=$(git status --porcelain)
         
         if [ -z "$changes" ]; then
@@ -62,21 +90,25 @@ jobs:
         else
           echo "has_changes=true" >> $GITHUB_OUTPUT
           
-          # 分类变更
+          # 分类变更文件
           added_files=$(echo "$changes" | grep '^A' | cut -c4-)
           modified_files=$(echo "$changes" | grep '^ M' | cut -c4-)
           deleted_files=$(echo "$changes" | grep '^ D' | cut -c4-)
+          renamed_files=$(echo "$changes" | grep '^R' | cut -c4- | awk '{print $2}')
           
-          # 保存变更列表
-          echo "$added_files" > $GITHUB_WORKSPACE/added_files.txt
-          echo "$modified_files" > $GITHUB_WORKSPACE/modified_files.txt
-          echo "$deleted_files" > $GITHUB_WORKSPACE/deleted_files.txt
+          # 保存变更列表到文件
+          mkdir -p $GITHUB_WORKSPACE/change_details
+          echo "$added_files" > $GITHUB_WORKSPACE/change_details/added_files.txt
+          echo "$modified_files" > $GITHUB_WORKSPACE/change_details/modified_files.txt
+          echo "$deleted_files" > $GITHUB_WORKSPACE/change_details/deleted_files.txt
+          echo "$renamed_files" > $GITHUB_WORKSPACE/change_details/renamed_files.txt
           
           # 输出统计
-          echo "📝 变更统计:"
-          echo "  ➕ 新增: $(echo "$added_files" | wc -l)"
-          echo "  ✏️ 修改: $(echo "$modified_files" | wc -l)"
-          echo "  ❌ 删除: $(echo "$deleted_files" | wc -l)"
+          echo "📊 变更统计:"
+          echo "  ➕ 新增: $(echo "$added_files" | wc -l) 文件"
+          echo "  ✏️ 修改: $(echo "$modified_files" | wc -l) 文件"
+          echo "  ❌ 删除: $(echo "$deleted_files" | wc -l) 文件"
+          echo "  🔄 重命名: $(echo "$renamed_files" | wc -l) 文件"
         fi
         
     # 7. 提交变更
@@ -84,23 +116,35 @@ jobs:
       if: steps.detect_changes.outputs.has_changes == 'true'
       run: |
         cd target-repo
-        git add -A
+        echo "💾 提交变更..."
         
         # 生成提交消息
-        commit_msg="安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')"
+        commit_time=$(date -u +'%Y-%m-%d %H:%M UTC')
+        commit_msg="安全同步: $commit_time"
         
         # 提交变更
         git commit -m "$commit_msg"
+        echo "✅ 已提交变更"
+        git log -1 --oneline
         
     # 8. 推送变更
     - name: Push changes
       if: steps.detect_changes.outputs.has_changes == 'true'
       run: |
         cd target-repo
-        git push origin main
-        echo "🚀 变更已推送"
+        echo "🚀 推送变更到远程仓库..."
         
-    # 9. 修复的Telegram通知（解决中文乱码问题）
+        # 显示远程信息
+        git remote -v
+        
+        # 执行推送
+        set -x
+        git push origin main
+        set +x
+        
+        echo "✅ 变更已成功推送"
+        
+    # 9. 高级Telegram通知
     - name: Send Telegram notification
       if: always() && env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
       run: |
@@ -108,57 +152,88 @@ jobs:
         export LC_ALL=en_US.UTF-8
         export LANG=en_US.UTF-8
         
+        # 工作流详情链接
+        workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        
         # 基础消息
+        sync_status=""
+        changes_summary=""
+        changes_sample=""
+        
         if [ "${{ steps.detect_changes.outputs.has_changes }}" = "true" ]; then
-          status="🚀 同步完成"
+          sync_status="🚀 *同步完成*"
+          
           # 读取变更文件
-          added_files=$(cat $GITHUB_WORKSPACE/added_files.txt 2>/dev/null || true)
-          modified_files=$(cat $GITHUB_WORKSPACE/modified_files.txt 2>/dev/null || true)
-          deleted_files=$(cat $GITHUB_WORKSPACE/deleted_files.txt 2>/dev/null || true)
+          added_files=$(cat $GITHUB_WORKSPACE/change_details/added_files.txt 2>/dev/null || true)
+          modified_files=$(cat $GITHUB_WORKSPACE/change_details/modified_files.txt 2>/dev/null || true)
+          deleted_files=$(cat $GITHUB_WORKSPACE/change_details/deleted_files.txt 2>/dev/null || true)
+          renamed_files=$(cat $GITHUB_WORKSPACE/change_details/renamed_files.txt 2>/dev/null || true)
           
-          # 构建变更描述
-          changes_desc=""
+          # 变更统计
+          total_changes=$(( $(echo "$added_files" | wc -l) + $(echo "$modified_files" | wc -l) + $(echo "$deleted_files" | wc -l) + $(echo "$renamed_files" | wc -l) ))
+          changes_summary="📊 *变更统计*%0A"
+          changes_summary+="• ➕ 新增: $(echo "$added_files" | wc -l) 文件%0A"
+          changes_summary+="• ✏️ 修改: $(echo "$modified_files" | wc -l) 文件%0A"
+          changes_summary+="• ❌ 删除: $(echo "$deleted_files" | wc -l) 文件%0A"
+          changes_summary+="• 🔄 重命名: $(echo "$renamed_files" | wc -l) 文件%0A"
+          changes_summary+="• ✅ 总计: $total_changes 个文件%0A%0A"
+          
+          # 变更示例
+          changes_sample="🔍 *变更示例*%0A"
           if [ -n "$added_files" ]; then
-            changes_desc+="➕ 新增: $(echo "$added_files" | wc -l)个文件\n"
-          fi
-          if [ -n "$modified_files" ]; then
-            changes_desc+="✏️ 修改: $(echo "$modified_files" | wc -l)个文件\n"
-          fi
-          if [ -n "$deleted_files" ]; then
-            changes_desc+="❌ 删除: $(echo "$deleted_files" | wc -l)个文件\n"
+            changes_sample+="➕ 新增:%0A"
+            echo "$added_files" | head -2 | while read file; do
+              changes_sample+="- [${file}](${{ env.REPO_URL }}/blob/main/${file})%0A"
+            done
           fi
           
-          # 显示前3个变更文件
-          sample_changes=""
-          if [ -n "$added_files" ]; then
-            sample_changes+="新增: $(echo "$added_files" | head -3 | sed 's/^/- /')\n"
-          fi
           if [ -n "$modified_files" ]; then
-            sample_changes+="修改: $(echo "$modified_files" | head -3 | sed 's/^/- /')\n"
+            changes_sample+="%0A✏️ 修改:%0A"
+            echo "$modified_files" | head -2 | while read file; do
+              changes_sample+="- [${file}](${{ env.REPO_URL }}/blob/main/${file})%0A"
+            done
           fi
+          
           if [ -n "$deleted_files" ]; then
-            sample_changes+="删除: $(echo "$deleted_files" | head -3 | sed 's/^/- /')\n"
+            changes_sample+="%0A❌ 删除:%0A"
+            echo "$deleted_files" | head -2 | while read file; do
+              changes_sample+="- ~${file}~%0A"
+            done
+          fi
+          
+          if [ -n "$renamed_files" ]; then
+            changes_sample+="%0A🔄 重命名:%0A"
+            echo "$renamed_files" | head -2 | while read file; do
+              changes_sample+="- ${file}%0A"
+            done
+          fi
+          
+          # 添加更多提示
+          if [ $total_changes -gt 8 ]; then
+            changes_sample+="%0Aℹ️ 只显示部分变更，查看全部请点击工作流详情链接"
           fi
         else
-          status="🟢 无变更"
-          changes_desc=""
-          sample_changes=""
+          sync_status="🟢 *无变更*"
         fi
         
-        # 创建消息文本文件（避免命令行编码问题）
-        cat << EOF > message.txt
-        *ddns-go 安全同步报告*
+        # 创建消息
+        message="*📦 ddns-go 安全同步报告*%0A%0A"
+        message+="${sync_status}%0A%0A"
+        message+="🕒 时间: $(date -u +'%Y-%m-%d %H:%M UTC')%0A"
+        message+="🔗 [工作流详情]($workflow_url)%0A%0A"
         
-        ${status}
-        ${changes_desc}
-        🕒 时间: $(date -u +'%Y-%m-%d %H:%M UTC')
-        🔗 [工作流详情]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)
+        if [ -n "$changes_summary" ]; then
+          message+="${changes_summary}"
+        fi
         
-        *变更示例:*
-        ${sample_changes}
-        EOF
+        if [ -n "$changes_sample" ]; then
+          message+="${changes_sample}"
+        fi
         
-        # 发送通知（使用文件输入避免编码问题）
+        # 写入文件避免编码问题
+        echo -e "$message" > message.txt
+        
+        # 发送通知
         curl -s -X POST \
           "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
           -H "Content-Type: application/json" \
@@ -173,3 +248,14 @@ jobs:
             }')
         
         echo "📨 Telegram通知已发送"
+        
+    # 10. 最终状态报告
+    - name: Final status report
+      if: always()
+      run: |
+        if [ "${{ steps.detect_changes.outputs.has_changes }}" = "true" ]; then
+          echo "::notice title=同步报告::🚀 成功推送变更到目标仓库"
+        else
+          echo "::notice title=同步报告::🟢 无变更需要同步"
+        fi
+        echo "🕒 工作流完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
