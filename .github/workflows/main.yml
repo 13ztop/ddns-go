@@ -1,53 +1,81 @@
-name: Full Sync ddns-go
+name: Full Sync ddns-go with Telegram Notify
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天UTC时间0点自动同步
+    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
   workflow_dispatch:     # 允许手动触发
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout your repo
+    - name: Checkout 13ztop/ddns-go
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.SYNC_TOKEN }}
+        repository: 13ztop/ddns-go
         path: target-repo
         fetch-depth: 0
-        ref: main  # 如果使用master分支请修改
+        ref: main
 
-    - name: Clone source repo
+    - name: Clone source ddns-go
       run: |
-        git clone https://github.com/474706852/ddns-go.git source-repo
+        git clone --depth 1 https://github.com/474706852/ddns-go.git source-repo
         cd source-repo
-        git checkout main  # 如果源仓库使用master分支请修改
+        git checkout main
 
-    - name: Sync all files
+    - name: Perform full sync
       run: |
-        # 删除目标仓库所有文件（保留.git目录）
+        # 保留目标仓库的.git目录
         find target-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
         
-        # 复制源仓库所有内容到目标仓库
+        # 复制所有文件（包括隐藏文件）
         cp -a source-repo/. target-repo/
-        
-        echo "All files synced completely"
+        echo "✅ 所有文件已从源仓库同步"
 
-    - name: Commit and push changes
+    - name: Check for changes
+      id: check-changes
+      run: |
+        cd target-repo
+        if git diff-index --quiet HEAD --; then
+          echo "changes_detected=false" >> $GITHUB_OUTPUT
+          echo "🟢 未检测到变更"
+        else
+          echo "changes_detected=true" >> $GITHUB_OUTPUT
+          echo "🟡 检测到变更"
+        fi
+
+    - name: Commit changes
+      if: steps.check-changes.outputs.changes_detected == 'true'
       run: |
         cd target-repo
         git config user.name "GitHub Actions Sync"
         git config user.email "actions@github.com"
-        
         git add -A
-        if git diff-index --quiet HEAD --; then
-          echo "No changes to commit"
-        else
-          git commit -m "Auto-sync: Full update from 474706852/ddns-go @ $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git push origin main  # 如果使用master分支请修改
-          echo "Changes pushed successfully"
-        fi
+        git commit -m "Auto-sync: Full update from 474706852/ddns-go @ $(date -u +'%Y-%m-%d %H:%M UTC')"
+        echo "🔵 变更已提交"
+
+    - name: Push changes to 13ztop/ddns-go
+      if: steps.check-changes.outputs.changes_detected == 'true'
+      run: |
+        cd target-repo
+        git push origin main
+        echo "🚀 变更已推送到 13ztop/ddns-go"
+
+    - name: Send Telegram notification
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.1929039590 }}
+        token: ${{ secrets.8038864843:AAG95CHH6hUl8LBrVOfmSJLAleUAr5pKT0c }}
+        message: |
+          🚀 *ddns-go 同步完成*
+          - 仓库: [13ztop/ddns-go](https://github.com/13ztop/ddns-go)
+          - 状态: ${{ job.status }}
+          - 变更: ${{ steps.check-changes.outputs.changes_detected == 'true' && '有变更 ✅' || '无变更 ⚪' }}
+          - 触发方式: ${{ github.event_name == 'workflow_dispatch' && '手动触发' || '定时触发' }}
+          - 运行时间: ${{ steps.check-changes.outputs.changes_detected == 'true' && format('{0}秒', job.steps[*].conclusion) || '无变更' }}
+          - 详细日志: [查看日志](https://github.com/13ztop/ddns-go/actions/runs/${{ github.run_id }})
+        parse_mode: markdown
 
     - name: Cleanup
-      run: |
-        rm -rf source-repo
+      run: rm -rf source-repo
