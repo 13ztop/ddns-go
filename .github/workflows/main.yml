@@ -1,71 +1,53 @@
-name: Sync ddns-go
+name: Full Sync ddns-go
 
-# on: 定义了工作流的触发事件。
-# schedule: 用于设置定时任务。cron 表达式定义了任务的运行频率和时间。
-# workflow_dispatch: 允许您手动从 GitHub Actions 界面触发此工作流，方便测试和即时同步。
 on:
   schedule:
-    # cron 表达式格式：秒 分 时 日 月 周
-    # 例如：0 0 * * * 表示每天协调世界时（UTC）00:00运行。
-    # UTC 00:00 对应北京时间（UTC+8）早上 8:00。
-    # 如果您想在北京时间每天凌晨 2:00 运行，cron 表达式应为：0 18 * * * (因为 2:00 - 8小时 = 前一天 18:00 UTC)
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # 每天UTC时间0点自动同步
+  workflow_dispatch:     # 允许手动触发
 
-# jobs: 定义了工作流中要执行的一系列任务。
 jobs:
   sync:
-    # runs-on: 指定了运行此任务的虚拟机环境。ubuntu-latest 是一个常用的 Linux 环境。
     runs-on: ubuntu-latest
-    # steps: 定义了任务中要执行的各个步骤。
     steps:
-      # 步骤1: Checkout current repository
-      # 使用 actions/checkout@v4 动作来克隆当前 GitHub Actions 运行所在的仓库。
-      # 这是为了让工作流能够访问和修改您自己的仓库文件。
-      - name: Checkout current repository
-        uses: actions/checkout@v4
+    - name: Checkout your repo
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.SYNC_TOKEN }}
+        path: target-repo
+        fetch-depth: 0
+        ref: main  # 如果使用master分支请修改
 
-      # 步骤2: Clone ddns-go repository
-      # 克隆目标外部仓库（ddns-go）。
-      # 注意：这里使用了之前创建的 PAT 来进行认证，以解决权限问题。
-      # ${{ secrets.DDNS_GO_PAT }} 会在运行时被替换为您在 Secrets 中存储的实际 PAT 值。
-      # 请确保将 DDNS_GO_PAT 替换为您在 Secrets 中设置的实际密钥名称。
-      - name: Clone ddns-go repository
-        run: |
-          git clone https://github.com/474706852/ddns-go.git ddns-go-temp
+    - name: Clone source repo
+      run: |
+        git clone https://github.com/474706852/ddns-go.git source-repo
+        cd source-repo
+        git checkout main  # 如果源仓库使用master分支请修改
 
-      # 步骤3: Sync files (customize this step)
-      # 这是核心同步逻辑所在。您需要根据您的具体需求修改此步骤。
-      # 由于 ddns-go 仓库的内容已直接克隆到当前工作目录的根目录，
-      # 您可以直接操作当前目录下的文件。
-      # 注意：如果您的仓库中包含与 ddns-go 仓库同名的文件，它们将被覆盖。
-      # 如果您希望保留您自己的工作流文件（例如 .github/workflows/sync-ddns-go.yml），
-      # 您可能需要在克隆 ddns-go 之前将其备份或移动到临时位置，并在同步完成后恢复。
-      - name: Sync files (customize this step)
-        run: |
-          echo "开始同步文件..."
-          # 示例：如果您需要处理您自己的工作流文件，可以在这里进行操作。
-          # 例如，备份 .github 目录：
-          # cp -r .github /tmp/github_backup
+    - name: Sync all files
+      run: |
+        # 删除目标仓库所有文件（保留.git目录）
+        find target-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+        
+        # 复制源仓库所有内容到目标仓库
+        cp -a source-repo/. target-repo/
+        
+        echo "All files synced completely"
 
-          # 在这里执行您的同步逻辑。由于 ddns-go 已经克隆到当前目录，
-          # 如果您只是想确保所有文件都在最新状态，可能不需要额外的 cp 命令。
-          # 如果您需要选择性地同步，可以使用 rsync 或其他命令。
-          echo "文件同步完成。"
+    - name: Commit and push changes
+      run: |
+        cd target-repo
+        git config user.name "GitHub Actions Sync"
+        git config user.email "actions@github.com"
+        
+        git add -A
+        if git diff-index --quiet HEAD --; then
+          echo "No changes to commit"
+        else
+          git commit -m "Auto-sync: Full update from 474706852/ddns-go @ $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push origin main  # 如果使用master分支请修改
+          echo "Changes pushed successfully"
+        fi
 
-      # 步骤4: Commit and push changes
-      # 将同步后的更改提交到您的仓库并推送到 GitHub。
-      # git config user.name 和 user.email 用于设置提交者的信息。
-      # git add . 添加所有更改到暂存区。
-      # git commit -m "..." 提交更改。如果没有任何更改，|| echo "No changes to commit" 会防止命令失败。
-      # git push 将更改推送到远程仓库。
-      # GITHUB_TOKEN 是 GitHub Actions 自动提供的，用于当前仓库的认证。
-      - name: Commit and push changes
-        run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add .
-          git commit -m "Sync ddns-go changes" || echo "No changes to commit"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Cleanup
+      run: |
+        rm -rf source-repo
