@@ -85,11 +85,34 @@ jobs:
         # 清理临时文件
         rm -f $GITHUB_WORKSPACE/before-sync.sha1 $GITHUB_WORKSPACE/after-sync.sha1
     
+    # 关键修复：在提交前重置仓库状态
+    - name: Reset repository before commit
+      if: ${{ steps.changes.outputs.has_changes != '0' }}
+      run: |
+        cd target-repo
+        
+        # 完全重置仓库状态
+        git reset --hard
+        git clean -f -d
+        
+        # 验证HEAD引用
+        if ! git rev-parse HEAD >/dev/null 2>&1; then
+          echo "修复HEAD引用..."
+          # 获取最新提交
+          latest_commit=$(git log -1 --format=%H 2>/dev/null || git rev-parse origin/main)
+          # 设置HEAD
+          git update-ref HEAD $latest_commit
+        fi
+        
+        echo "✅ 仓库状态已重置"
+    
     # 提交变更
     - name: Commit changes
       if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
         cd target-repo
+        
+        # 添加所有变更
         git add -u
         
         # 读取变更文件列表
@@ -101,6 +124,7 @@ jobs:
           commit_msg="$commit_msg%0A变更文件: $changed_files"
         fi
         
+        # 提交变更
         git commit -m "$commit_msg"
         echo "✅ 已提交 ${{ steps.changes.outputs.has_changes }} 个变更"
     
@@ -126,9 +150,9 @@ jobs:
         changed_files=$(cat "$GITHUB_WORKSPACE/changed_files.txt" | sed 's/,$//')
         
         # 确定通知消息
-        if [ "${{ steps.changes.outputs.has_changes }}" == "0" ]; then
+        if [ "${{ steps.changes.outputs.has_changes }}" = "0" ]; then
           message="*ddns-go 同步报告*%0A%0A🟢 *无文件变更*%0A%0A🕒 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')%0A🔗 [工作流详情]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
-        elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
+        elif [ -n "${{ steps.changes.outputs.has_changes }}" ] && [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
           # 格式化变更文件列表
           changed_files_formatted=$(echo "$changed_files" | tr ',' '\n' | head -5 | sed 's/^/• /')
           
@@ -156,7 +180,6 @@ jobs:
     - name: Final status report
       if: always()
       run: |
-        # 修复条件判断
         if [ "${{ steps.changes.outputs.has_changes }}" = "0" ]; then
           echo "::notice title=同步报告::🟢 无变更需要推送"
         elif [ -n "${{ steps.changes.outputs.has_changes }}" ] && [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
