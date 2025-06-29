@@ -16,14 +16,17 @@ jobs:
         repository: 13ztop/ddns-go
         path: target-repo
         ref: main
-        fetch-depth: 0  # 获取所有历史，确保可以重置
+        fetch-depth: 0  # 获取完整历史记录
         persist-credentials: true
 
-    # 关键修复：安全重置（不清理未跟踪文件）
     - name: Reset to main branch
       run: |
         cd target-repo
-        git fetch origin main
+        # 确保仓库状态干净
+        git reset --hard HEAD
+        git clean -f -d
+        # 强制同步到远程最新状态
+        git fetch origin
         git reset --hard origin/main
 
     - name: Clone source repository
@@ -40,6 +43,17 @@ jobs:
         done
         echo "✅ 安全同步完成：仅更新了源仓库存在的文件"
 
+    # 关键修复：在Git操作前验证仓库状态
+    - name: Repair Git repository if needed
+      run: |
+        cd target-repo
+        # 如果HEAD无效，尝试修复
+        if ! git rev-parse HEAD >/dev/null 2>&1; then
+          echo "⚠️ 检测到HEAD无效，尝试修复..."
+          git symbolic-ref HEAD refs/heads/main
+          git reset --hard
+        fi
+
     - name: Configure Git credentials
       run: |
         cd target-repo
@@ -47,17 +61,18 @@ jobs:
         git config user.email "actions@github.com"
         git remote set-url origin https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git
 
-    # 修复set-output弃用警告
     - name: Check for changes
       id: changes
       run: |
         cd target-repo
-        changes=$(git status --porcelain | wc -l | tr -d ' ')
-        echo "has_changes=$changes" >> $GITHUB_OUTPUT
+        # 确保仓库状态正常
         git status
+        change_count=$(git status --porcelain | wc -l | tr -d ' ')
+        echo "has_changes=$change_count" >> $GITHUB_OUTPUT
+        echo "变更数量: $change_count"
 
     - name: Commit changes
-      if: steps.changes.outputs.has_changes != '0'
+      if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
         cd target-repo
         git add -u
@@ -65,12 +80,12 @@ jobs:
         echo "✅ 变更已提交 (仅更新现有文件)"
 
     - name: Push changes
-      if: steps.changes.outputs.has_changes != '0'
+      if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
         cd target-repo
         git push origin main
         echo "🚀 安全变更已推送到 GitHub"
         
     - name: No changes detected
-      if: steps.changes.outputs.has_changes == '0'
+      if: ${{ steps.changes.outputs.has_changes == '0' }}
       run: echo "🟢 无变更可提交"
