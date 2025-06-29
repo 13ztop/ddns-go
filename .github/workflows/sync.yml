@@ -65,8 +65,8 @@ jobs:
     - name: Send Telegram notification
       uses: appleboy/telegram-action@v1.0.0
       with:
-        to: ${{ secrets.1929039590 }}
-        token: ${{ secrets.8038864843:AAG95CHH6hUl8LBrVOfmSJLAleUAr5pKT0c }}
+        to: ${{ secrets.1929039590 }}  # 使用合法的Secret名称
+        token: ${{ secrets.8038864843:AAG95CHH6hUl8LBrVOfmSJLAleUAr5pKT0c }}  # 使用合法的Secret名称
         message: |
           🚀 *ddns-go 同步完成*
           - 仓库: [13ztop/ddns-go](https://github.com/13ztop/ddns-go)
