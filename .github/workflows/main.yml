@@ -2,8 +2,8 @@ name: Safe Sync ddns-go
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
+  workflow_dispatch:     # 允许手动触发
 
 env:
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -18,16 +18,19 @@ jobs:
       run: |
         rm -rf target-repo source-repo
         mkdir -p target-repo source-repo
+        echo "🔄 工作区准备完成"
     
     # 克隆源仓库
     - name: Clone source repository
       run: |
         git clone --depth=1 https://github.com/474706852/ddns-go.git source-repo
+        echo "✅ 源仓库克隆完成"
     
     # 克隆目标仓库
     - name: Clone target repository
       run: |
         git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
+        echo "✅ 目标仓库克隆完成"
     
     # 创建同步前哈希快照
     - name: Create pre-sync snapshot
@@ -35,7 +38,7 @@ jobs:
         cd target-repo
         # 排除 .github/workflows 目录
         find . -type f ! -path './.github/workflows/*' -exec sha1sum {} \; > ../before-sync.sha1
-        echo "✅ 创建同步前文件哈希快照"
+        echo "📸 创建同步前文件哈希快照完成"
     
     # 文件替换同步（排除 .github/workflows）
     - name: Replace files (excluding workflows)
@@ -44,7 +47,7 @@ jobs:
         # 替换除 .github/workflows 外的所有文件
         find . -type f ! -path './.github/workflows/*' | while read -r file; do
           if [ -f "../target-repo/$file" ]; then
-            echo "替换文件: $file"
+            echo "🔄 替换文件: $file"
             cp -f "$file" "../target-repo/$file"
           fi
         done
@@ -56,6 +59,7 @@ jobs:
         cd target-repo
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
+        echo "⚙️ Git配置完成"
     
     # 检测变更（基于文件哈希）
     - name: Check for changes
@@ -70,9 +74,11 @@ jobs:
         changed_files=$(diff -U0 ../before-sync.sha1 ../after-sync.sha1 | grep '^-' | cut -d' ' -f3- | sort -u)
         change_count=$(echo "$changed_files" | grep -c .) || change_count=0
         
-        # 设置输出变量（确保正确格式）
+        # 设置输出变量
         echo "has_changes=$change_count" >> $GITHUB_OUTPUT
-        echo "changed_files=$(echo "$changed_files" | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
+        
+        # 将变更文件列表保存为文本文件
+        echo "$changed_files" | tr '\n' ',' > ../changed_files.txt
         
         if [ "$change_count" -gt 0 ]; then
           echo "📝 检测到变更 ($change_count 个文件):"
@@ -89,14 +95,17 @@ jobs:
       if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
         cd target-repo
-        git add -u
+        
+        # 读取变更文件列表
+        changed_files=$(cat ../changed_files.txt | sed 's/,$//')
         
         # 格式化提交消息
         commit_msg="安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')"
-        if [ -n "${{ steps.changes.outputs.changed_files }}" ]; then
-          commit_msg="$commit_msg%0A变更文件: ${{ steps.changes.outputs.changed_files }}"
+        if [ -n "$changed_files" ]; then
+          commit_msg="$commit_msg%0A变更文件: $changed_files"
         fi
         
+        git add -u
         git commit -m "$commit_msg"
         echo "✅ 已提交 ${{ steps.changes.outputs.has_changes }} 个变更"
     
@@ -106,61 +115,45 @@ jobs:
       run: |
         cd target-repo
         git push origin main
-        echo "🚀 已成功推送以下变更到 GitHub:"
-        echo "${{ steps.changes.outputs.changed_files }}" | tr ',' '\n'
-    
-    # 准备Telegram通知消息（修复输出问题）
-    - name: Prepare Telegram message
-      id: telegram-msg
-      if: always()
-      run: |
-        # 确定通知消息
-        if [ "${{ steps.changes.outputs.has_changes }}" == "0" ]; then
-          status="🟢 *无文件变更*"
-          changed_files_formatted=""
-        elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
-          # 直接使用变更文件列表
-          changed_files_formatted=$(echo "${{ steps.changes.outputs.changed_files }}" | tr ',' '\n' | head -5 | sed 's/^/• /')
-          
-          if [ "${{ steps.changes.outputs.has_changes }}" -gt 5 ]; then
-            changed_files_formatted="$changed_files_formatted%0A• 等${{ steps.changes.outputs.has_changes }}个文件..."
-          fi
-          
-          status="🚀 *${{ steps.changes.outputs.has_changes }}个文件变更*%0A$changed_files_formatted"
-        else
-          status="⚠️ *无法确定变更状态*"
-          changed_files_formatted=""
-        fi
-        
-        # 添加时间信息
-        timestamp="🕒 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-        
-        # 添加工作流链接
-        workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-        link="🔗 [工作流详情]($workflow_url)"
-        
-        # 组合消息（简化格式）
-        message="*ddns-go 同步报告*%0A%0A$status%0A%0A$timestamp%0A$link"
-        
-        # 直接输出消息内容（不再使用文件命令）
-        echo "::notice::Telegram 消息已准备"
-        echo "message=$message" >> $GITHUB_OUTPUT
+        echo "🚀 已成功推送变更到 GitHub"
     
     # 发送Telegram通知（总是执行）
     - name: Send Telegram notification
       if: always() && env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
       run: |
+        # 确定通知消息
+        if [ "${{ steps.changes.outputs.has_changes }}" == "0" ]; then
+          message="*ddns-go 同步报告*%0A%0A🟢 *无文件变更*%0A%0A🕒 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')%0A🔗 [工作流详情]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+        elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
+          # 读取变更文件列表
+          changed_files=$(cat ../changed_files.txt | sed 's/,$//')
+          
+          # 格式化变更文件列表
+          changed_files_formatted=$(echo "$changed_files" | tr ',' '\n' | head -5 | sed 's/^/• /')
+          
+          if [ "${{ steps.changes.outputs.has_changes }}" -gt 5 ]; then
+            changed_files_formatted="$changed_files_formatted%0A• 等${{ steps.changes.outputs.has_changes }}个文件..."
+          fi
+          
+          message="*ddns-go 同步报告*%0A%0A🚀 *${{ steps.changes.outputs.has_changes }}个文件变更*%0A$changed_files_formatted%0A%0A🕒 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')%0A🔗 [工作流详情]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+        else
+          message="*ddns-go 同步报告*%0A%0A⚠️ *无法确定变更状态*%0A%0A🕒 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')%0A🔗 [工作流详情]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+        fi
+        
         # 发送Telegram通知
         curl -s -X POST \
           "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
           -d "chat_id=$TELEGRAM_CHAT_ID" \
-          -d "text=${{ steps.telegram-msg.outputs.message }}" \
+          -d "text=$message" \
           -d "parse_mode=Markdown" \
           -d "disable_web_page_preview=true"
         
         echo "✅ Telegram 通知已发送"
+        
+        # 清理临时文件
+        rm -f ../changed_files.txt
     
-    # 最终状态报告（简化版）
+    # 最终状态报告
     - name: Final status report
       if: always()
       run: |
