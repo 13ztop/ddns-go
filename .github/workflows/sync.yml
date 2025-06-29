@@ -77,19 +77,25 @@ jobs:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
-        # 创建消息内容
-        MESSAGE="🚀 *ddns-go 同步完成*
-        - 仓库: [13ztop/ddns-go](https://github.com/13ztop/ddns-go)
-        - 状态: ${{ job.status }}
-        - 变更: ${{ steps.check-changes.outputs.changes_detected == 'true' && '有变更 ✅' || '无变更 ⚪' }}
-        - 触发方式: ${{ github.event_name == 'workflow_dispatch' && '手动触发' || '定时触发' }}
-        - 详细日志: [查看日志](https://github.com/13ztop/ddns-go/actions/runs/${{ github.run_id }})"
+        # 创建基本消息（避免特殊字符问题）
+        STATUS="${{ job.status }}"
+        CHANGES="${{ steps.check-changes.outputs.changes_detected == 'true' && '有变更 ✅' || '无变更 ⚪' }}"
+        TRIGGER="${{ github.event_name == 'workflow_dispatch' && '手动触发' || '定时触发' }}"
+        LOG_URL="https://github.com/13ztop/ddns-go/actions/runs/${{ github.run_id }}"
         
-        # URL 编码消息内容
-        ENCODED_MSG=$(echo "$MESSAGE" | sed -e 's/%/%25/g' -e 's/ /%20/g' -e 's/!/%21/g' -e 's/"/%22/g' -e 's/#/%23/g' -e 's/\$/%24/g' -e 's/&/%26/g' -e "s/'/%27/g" -e 's/(/%28/g' -e 's/)/%29/g' -e 's/*/%2A/g' -e 's/+/%2B/g' -e 's/,/%2C/g' -e 's/-/%2D/g' -e 's/\./%2E/g' -e 's/\//%2F/g' -e 's/:/%3A/g' -e 's/;/%3B/g' -e 's//%3E/g' -e 's/?/%3F/g' -e 's/@/%40/g' -e 's/\[/%5B/g' -e 's/\\/%5C/g' -e 's/\]/%5D/g' -e 's/\^/%5E/g' -e 's/_/%5F/g' -e 's/`/%60/g' -e 's/{/%7B/g' -e 's/|/%7C/g' -e 's/}/%7D/g' -e 's/~/%7E/g')
+        # 使用简单的消息格式
+        MESSAGE="🚀 ddns-go 同步完成
+        仓库: 13ztop/ddns-go
+        状态: $STATUS
+        变更: $CHANGES
+        触发方式: $TRIGGER
+        详细日志: $LOG_URL"
         
-        # 发送请求
-        curl -s -X GET "https://api.telegram.org/bot$BOT_TOKEN/sendMessage?chat_id=$CHAT_ID&text=$ENCODED_MSG&parse_mode=markdown" > /dev/null
+        # 发送请求（使用 POST 方法避免编码问题）
+        curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+          -d "chat_id=$CHAT_ID" \
+          -d "text=$MESSAGE" \
+          -d "parse_mode=Markdown" > /dev/null
         
         # 检查结果
         if [ $? -eq 0 ]; then
