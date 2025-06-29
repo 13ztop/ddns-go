@@ -2,104 +2,100 @@ name: Safe Sync ddns-go
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
+  workflow_dispatch:     # 允许手动触发
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-    # 1. 准备全新工作空间
-    - name: Clean workspace
+    # 准备工作区
+    - name: Prepare workspace
       run: |
         rm -rf target-repo source-repo
-        mkdir target-repo source-repo
+        mkdir -p target-repo source-repo
     
-    # 2. 直接克隆源仓库
+    # 克隆源仓库
     - name: Clone source repository
       run: |
         git clone --depth=1 https://github.com/474706852/ddns-go.git source-repo
     
-    # 3. 直接克隆目标仓库（使用显式URL）
+    # 克隆目标仓库
     - name: Clone target repository
       run: |
-        git clone --depth=1 https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git target-repo
+        git clone --depth=1 "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
     
-    # 4. 安全文件同步
+    # 安全文件同步
     - name: Safe file sync
       run: |
         cd source-repo
-        find . -type f | while read file; do
+        # 仅更新目标仓库中已存在的文件
+        find . -type f | while read -r file; do
           if [ -f "../target-repo/$file" ]; then
-            cp -v "$file" "../target-repo/$file"
+            echo "更新文件: $file"
+            cp -f "$file" "../target-repo/$file"
           fi
         done
         echo "✅ 安全同步完成"
     
-    # 5. 验证并修复Git仓库状态（重构版）
-    - name: Repair Git repository if needed
-      run: |
-        cd target-repo
-        
-        # 检查仓库是否损坏
-        if ! git fsck --full --strict; then
-          echo "⚠️ 仓库损坏，尝试修复..."
-          # 备份工作区文件（不包括.git目录）
-          cd ..
-          mkdir backup-workspace
-          # 复制target-repo中除.git外的所有内容
-          rsync -a --exclude='.git' target-repo/ backup-workspace/ || true
-          
-          # 删除并重新克隆target-repo
-          rm -rf target-repo
-          git clone --depth=1 https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git target-repo
-          
-          # 将备份的文件覆盖到新克隆的target-repo
-          rsync -a backup-workspace/ target-repo/ || true
-          rm -rf backup-workspace
-          cd target-repo
-        fi
-        
-        # 确保仓库状态正常
-        git rev-parse HEAD
-        git reset --hard
-        git clean -f -d
-    
-    # 6. 配置Git用户信息
+    # 配置Git用户信息
     - name: Configure Git
       run: |
         cd target-repo
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
     
-    # 7. 检查变更
+    # 检查变更
     - name: Check for changes
       id: changes
       run: |
         cd target-repo
-        change_count=$(git status --porcelain | wc -l | tr -d ' ')
+        # 获取变更状态
+        git status --porcelain > changes.txt
+        change_count=$(wc -l < changes.txt | tr -d ' ')
         echo "has_changes=$change_count" >> $GITHUB_OUTPUT
-        echo "变更数量: $change_count"
-        git status
+        
+        # 设置变更报告
+        if [ "$change_count" -gt 0 ]; then
+          echo "📝 检测到变更 ($change_count 个文件)"
+          cat changes.txt
+        else
+          echo "🟢 无变更检测到"
+        fi
     
-    # 8. 提交变更
+    # 提交变更（仅在检测到变更时执行）
     - name: Commit changes
       if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
         cd target-repo
         git add -u
-        git commit -m "Safe sync: $(date -u +'%Y-%m-%d %H:%M UTC')"
-        echo "✅ 变更已提交"
+        git commit -m "安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')"
+        echo "✅ 已提交 ${{ steps.changes.outputs.has_changes }} 个变更"
     
-    # 9. 推送变更
+    # 推送变更（仅在检测到变更时执行）
     - name: Push changes
       if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
         cd target-repo
         git push origin main
-        echo "🚀 变更已推送到 GitHub"
+        echo "🚀 已成功推送变更到 GitHub"
+    
+    # 最终状态报告（总是执行）
+    - name: Final sync report
+      if: always()  # 无论前面步骤是否失败都执行
+      run: |
+        if [ "${{ steps.changes.outputs.has_changes }}" == "0" ]; then
+          echo "::notice title=同步报告::🟢 无变更需要推送 - 仓库已是最新状态"
+        elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
+          echo "::notice title=同步报告::🚀 已成功推送 ${{ steps.changes.outputs.has_changes }} 个变更"
+        else
+          echo "::warning title=同步报告::⚠️ 无法确定变更状态 - 请检查日志"
+        fi
         
-    # 10. 无变更处理
-    - name: No changes detected
-      if: ${{ steps.changes.outputs.has_changes == '0' }}
-      run: echo "🟢 无变更可提交"
+        # 添加时间戳
+        echo "🕒 同步完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+        
+        # 添加工作流链接（仅在GitHub环境中）
+        if [ -n "$GITHUB_SERVER_URL" ]; then
+          echo "🔗 工作流详情: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        fi
