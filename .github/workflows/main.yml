@@ -50,26 +50,28 @@ jobs:
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
     
-    # 检查变更（避免依赖HEAD）
+    # 详细检查变更
     - name: Check for changes
       id: changes
       run: |
         cd target-repo
         
-        # 获取变更数量
-        change_count=0
-        if git status --porcelain > /dev/null 2>&1; then
-          change_count=$(git status --porcelain | wc -l | tr -d ' ')
-        else
-          # 如果git status失败，使用低级命令
-          git update-index -q --refresh
-          change_count=$(git diff-index --name-only HEAD | wc -l | tr -d ' ')
-        fi
+        # 获取变更文件列表
+        git status --porcelain > changes.txt
+        change_count=$(wc -l < changes.txt | tr -d ' ')
         
+        # 提取变更文件列表（排除状态标记）
+        changed_files=$(awk '{print $2}' changes.txt | tr '\n' ',')
+        changed_files=${changed_files%,}  # 移除末尾逗号
+        
+        # 设置输出变量
         echo "has_changes=$change_count" >> $GITHUB_OUTPUT
+        echo "changed_files=$changed_files" >> $GITHUB_OUTPUT
         
+        # 输出变更详情
         if [ "$change_count" -gt 0 ]; then
-          echo "📝 检测到变更 ($change_count 个文件)"
+          echo "📝 检测到变更 ($change_count 个文件):"
+          cat changes.txt
         else
           echo "🟢 无变更检测到"
         fi
@@ -80,7 +82,8 @@ jobs:
       run: |
         cd target-repo
         git add -u
-        git commit -m "安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')"
+        commit_msg="安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')%0A变更文件: ${{ steps.changes.outputs.changed_files }}"
+        git commit -m "$commit_msg"
         echo "✅ 已提交 ${{ steps.changes.outputs.has_changes }} 个变更"
     
     # 推送变更（仅在检测到变更时执行）
@@ -89,7 +92,8 @@ jobs:
       run: |
         cd target-repo
         git push origin main
-        echo "🚀 已成功推送变更到 GitHub"
+        echo "🚀 已成功推送以下变更到 GitHub:"
+        echo "${{ steps.changes.outputs.changed_files }}" | tr ',' '\n'
     
     # 准备Telegram通知消息
     - name: Prepare Telegram message
@@ -98,9 +102,16 @@ jobs:
       run: |
         # 确定通知消息
         if [ "${{ steps.changes.outputs.has_changes }}" == "0" ]; then
-          status="🟢 *无变更需要推送*"
+          status="🟢 *无文件变更*"
         elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
-          status="🚀 *已成功推送 ${{ steps.changes.outputs.has_changes }} 个变更*"
+          # 格式化变更文件列表
+          changed_files_formatted=$(echo "${{ steps.changes.outputs.changed_files }}" | tr ',' '\n' | head -5 | sed 's/^/• /')
+          
+          if [ "${{ steps.changes.outputs.has_changes }}" -gt 5 ]; then
+            changed_files_formatted="$changed_files_formatted%0A• 等${{ steps.changes.outputs.has_changes }}个文件..."
+          fi
+          
+          status="🚀 *${{ steps.changes.outputs.has_changes }}个文件变更*%0A$changed_files_formatted"
         else
           status="⚠️ *无法确定变更状态*"
         fi
@@ -113,7 +124,7 @@ jobs:
         link="🔗 [工作流详情]($workflow_url)"
         
         # 组合消息
-        message="*ddns-go 同步报告*%0A%0A$status%0A$timestamp%0A$link"
+        message="*ddns-go 同步报告*%0A%0A$status%0A%0A$timestamp%0A$link"
         
         # 设置输出
         echo "message=$message" >> $GITHUB_OUTPUT
@@ -141,6 +152,8 @@ jobs:
           echo "::notice title=同步报告::🟢 无变更需要推送"
         elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
           echo "::notice title=同步报告::🚀 已成功推送 ${{ steps.changes.outputs.has_changes }} 个变更"
+          echo "变更文件:"
+          echo "${{ steps.changes.outputs.changed_files }}" | tr ',' '\n'
         else
           echo "::warning title=同步报告::⚠️ 无法确定变更状态"
         fi
