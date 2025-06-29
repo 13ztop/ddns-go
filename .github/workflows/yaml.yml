@@ -25,7 +25,7 @@ jobs:
         path: target-repo
         fetch-depth: 0
         ref: main
-        persist-credentials: true  # 确保后续步骤使用相同凭证
+        persist-credentials: true
 
     - name: Debug: List files after checkout
       run: |
@@ -78,9 +78,8 @@ jobs:
         echo "变更检测前状态:"
         git status
         
-        git add -A  # 确保所有更改都被暂存
+        git add -A
         
-        # 使用 git status 检测变更
         if [ -z "$(git status --porcelain)" ]; then
           echo "🟢 未检测到变更"
           echo "changes_detected=false" >> $GITHUB_OUTPUT
@@ -125,29 +124,6 @@ jobs:
         git log -1 --oneline
         echo "远程仓库状态:"
         git ls-remote origin
-
-    - name: Send Telegram notification (Simplified)
-      env:
-        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: |
-        # 基本测试消息
-        MESSAGE="GitHub Sync: ddns-go 同步操作完成。状态: ${{ job.status }}"
-        
-        # 发送请求
-        curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-          -d "chat_id=$CHAT_ID" \
-          -d "text=$MESSAGE" \
-          -o response.txt
-        
-        echo "Telegram API 响应:"
-        cat response.txt
-        
-        if grep -q '"ok":true' response.txt; then
-          echo "✅ Telegram 通知已发送"
-        else
-          echo "❌ Telegram 通知发送失败"
-        fi
 
     - name: Cleanup
       run: rm -rf source-repo
