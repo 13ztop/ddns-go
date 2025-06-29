@@ -24,37 +24,10 @@ jobs:
       run: |
         git clone --depth=1 https://github.com/474706852/ddns-go.git source-repo
     
-    # 克隆目标仓库（使用完整克隆）
+    # 克隆目标仓库
     - name: Clone target repository
       run: |
-        # 使用完整克隆代替浅克隆
         git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
-        cd target-repo
-        git checkout main
-    
-    # 关键修复：重建仓库状态
-    - name: Rebuild repository state
-      run: |
-        cd target-repo
-        
-        # 1. 备份当前文件内容
-        mkdir ../temp-content
-        find . -maxdepth 1 ! -name '.git' -exec mv {} ../temp-content/ \;
-        
-        # 2. 完全重建仓库
-        rm -rf .git
-        git init
-        git remote add origin https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git
-        git fetch origin main
-        git checkout -b main FETCH_HEAD
-        
-        # 3. 恢复文件内容
-        mv ../temp-content/* . || true
-        rm -rf ../temp-content
-        
-        # 4. 验证仓库状态
-        git rev-parse HEAD
-        git status
     
     # 安全文件同步
     - name: Safe file sync
@@ -75,51 +48,44 @@ jobs:
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
     
-    # 详细检查变更（使用低级命令避免HEAD依赖）
+    # 完全绕过Git命令检测变更
     - name: Check for changes
       id: changes
       run: |
         cd target-repo
         
-        # 方法1: 使用git update-index和git diff-index
-        git update-index -q --refresh
-        if ! git diff-index --quiet HEAD --; then
-          # 获取变更文件列表
-          git diff-index --name-only HEAD -- > changes.txt
-          change_count=$(wc -l < changes.txt | tr -d ' ')
-          changed_files=$(tr '\n' ',' < changes.txt)
-          changed_files=${changed_files%,}  # 移除末尾逗号
-        else
-          change_count=0
-          changed_files=""
-        fi
+        # 创建文件哈希快照
+        find . -type f ! -path './.git/*' -exec sha1sum {} \; > ../before-sync.sha1
         
-        # 方法2: 如果方法1失败，使用文件哈希比较
-        if [ -z "$changed_files" ] && [ "$change_count" -eq 0 ]; then
-          change_count=0
-          changed_files=""
-          for file in $(find . -type f ! -path './.git/*'); do
-            if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
-              current_hash=$(git hash-object "$file")
-              index_hash=$(git ls-files -s "$file" | awk '{print $2}')
-              if [ "$current_hash" != "$index_hash" ]; then
-                changed_files="$changed_files$file,"
-                change_count=$((change_count+1))
-              fi
-            fi
-          done
-          changed_files=${changed_files%,}
-        fi
+        # 执行同步
+        cd ../source-repo
+        find . -type f | while read -r file; do
+          if [ -f "../target-repo/$file" ]; then
+            cp -f "$file" "../target-repo/$file"
+          fi
+        done
         
+        # 比较文件哈希
+        cd ../target-repo
+        find . -type f ! -path './.git/*' -exec sha1sum {} \; > ../after-sync.sha1
+        
+        # 检测变更
+        changed_files=$(diff -U0 ../before-sync.sha1 ../after-sync.sha1 | grep '^-' | cut -d' ' -f3- | sort -u)
+        change_count=$(echo "$changed_files" | grep -c .) || change_count=0
+        
+        # 设置输出变量
         echo "has_changes=$change_count" >> $GITHUB_OUTPUT
-        echo "changed_files=$changed_files" >> $GITHUB_OUTPUT
+        echo "changed_files=$(echo "$changed_files" | tr '\n' ',')" >> $GITHUB_OUTPUT
         
         if [ "$change_count" -gt 0 ]; then
           echo "📝 检测到变更 ($change_count 个文件):"
-          echo "$changed_files" | tr ',' '\n'
+          echo "$changed_files" | sed 's/^/• /'
         else
           echo "🟢 无变更检测到"
         fi
+        
+        # 清理临时文件
+        rm -f ../before-sync.sha1 ../after-sync.sha1
     
     # 提交变更（仅在检测到变更时执行）
     - name: Commit changes
@@ -127,7 +93,13 @@ jobs:
       run: |
         cd target-repo
         git add -u
-        commit_msg="安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')%0A变更文件: ${{ steps.changes.outputs.changed_files }}"
+        
+        # 格式化提交消息
+        commit_msg="安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')"
+        if [ -n "${{ steps.changes.outputs.changed_files }}" ]; then
+          commit_msg="$commit_msg%0A变更文件: ${{ steps.changes.outputs.changed_files }}"
+        fi
+        
         git commit -m "$commit_msg"
         echo "✅ 已提交 ${{ steps.changes.outputs.has_changes }} 个变更"
     
