@@ -29,17 +29,27 @@ jobs:
       run: |
         git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
     
-    # 安全文件同步
-    - name: Safe file sync
+    # 创建同步前哈希快照
+    - name: Create pre-sync snapshot
+      id: pre-sync
+      run: |
+        cd target-repo
+        # 排除 .github/workflows 目录
+        find . -type f ! -path './.github/workflows/*' -exec sha1sum {} \; > ../before-sync.sha1
+        echo "✅ 创建同步前文件哈希快照"
+    
+    # 文件替换同步（排除 .github/workflows）
+    - name: Replace files (excluding workflows)
       run: |
         cd source-repo
-        find . -type f | while read -r file; do
+        # 替换除 .github/workflows 外的所有文件
+        find . -type f ! -path './.github/workflows/*' | while read -r file; do
           if [ -f "../target-repo/$file" ]; then
-            echo "更新文件: $file"
+            echo "替换文件: $file"
             cp -f "$file" "../target-repo/$file"
           fi
         done
-        echo "✅ 安全同步完成"
+        echo "✅ 文件替换完成（已排除 .github/workflows 目录）"
     
     # 配置Git用户信息
     - name: Configure Git
@@ -48,28 +58,16 @@ jobs:
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
     
-    # 完全绕过Git命令检测变更
+    # 检测变更（基于文件哈希）
     - name: Check for changes
       id: changes
       run: |
         cd target-repo
         
-        # 创建文件哈希快照
-        find . -type f ! -path './.git/*' -exec sha1sum {} \; > ../before-sync.sha1
+        # 创建同步后哈希快照（排除 .github/workflows）
+        find . -type f ! -path './.github/workflows/*' -exec sha1sum {} \; > ../after-sync.sha1
         
-        # 执行同步
-        cd ../source-repo
-        find . -type f | while read -r file; do
-          if [ -f "../target-repo/$file" ]; then
-            cp -f "$file" "../target-repo/$file"
-          fi
-        done
-        
-        # 比较文件哈希
-        cd ../target-repo
-        find . -type f ! -path './.git/*' -exec sha1sum {} \; > ../after-sync.sha1
-        
-        # 检测变更
+        # 比较哈希值检测变更
         changed_files=$(diff -U0 ../before-sync.sha1 ../after-sync.sha1 | grep '^-' | cut -d' ' -f3- | sort -u)
         change_count=$(echo "$changed_files" | grep -c .) || change_count=0
         
