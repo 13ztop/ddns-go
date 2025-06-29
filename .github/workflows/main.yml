@@ -2,8 +2,8 @@ name: Safe Sync ddns-go
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
-  workflow_dispatch:     # 允许手动触发
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -16,22 +16,28 @@ jobs:
         repository: 13ztop/ddns-go
         path: target-repo
         ref: main
+        fetch-depth: 0  # 获取所有历史，确保可以重置
         persist-credentials: true
+
+    # 关键修复：安全重置（不清理未跟踪文件）
+    - name: Reset to main branch
+      run: |
+        cd target-repo
+        git fetch origin main
+        git reset --hard origin/main
 
     - name: Clone source repository
       run: |
         git clone --depth 1 https://github.com/474706852/ddns-go.git source-repo
 
-    - name: Safe file sync (核心修复)
+    - name: Safe file sync
       run: |
-        # 只覆盖源仓库中存在的文件，不删除目标仓库特有文件
         cd source-repo
         find . -type f | while read file; do
           if [ -f "../target-repo/$file" ]; then
             cp -v "$file" "../target-repo/$file"
           fi
         done
-        
         echo "✅ 安全同步完成：仅更新了源仓库存在的文件"
 
     - name: Configure Git credentials
@@ -41,18 +47,20 @@ jobs:
         git config user.email "actions@github.com"
         git remote set-url origin https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git
 
+    # 修复set-output弃用警告
     - name: Check for changes
       id: changes
       run: |
         cd target-repo
-        echo "::set-output name=has_changes::$(git status --porcelain | wc -l | tr -d ' ')"
-        git status  # 显示变更状态
+        changes=$(git status --porcelain | wc -l | tr -d ' ')
+        echo "has_changes=$changes" >> $GITHUB_OUTPUT
+        git status
 
     - name: Commit changes
       if: steps.changes.outputs.has_changes != '0'
       run: |
         cd target-repo
-        git add -u  # 只添加已跟踪文件的变更
+        git add -u
         git commit -m "Safe sync: $(date -u +'%Y-%m-%d %H:%M UTC')"
         echo "✅ 变更已提交 (仅更新现有文件)"
 
