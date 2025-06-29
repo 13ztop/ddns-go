@@ -1,4 +1,4 @@
-name: Full Sync ddns-go with Telegram Notify
+name: Full Sync ddns-go with Debugging
 
 on:
   schedule:
@@ -9,6 +9,14 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+    - name: Debug: Print environment
+      run: |
+        echo "GitHub Repository: 13ztop/ddns-go"
+        echo "Source Repository: 474706852/ddns-go"
+        echo "Workflow Run ID: ${{ github.run_id }}"
+        echo "Triggered by: ${{ github.event_name }}"
+        echo "Runner OS: ${{ runner.os }}"
+
     - name: Checkout 13ztop/ddns-go
       uses: actions/checkout@v4
       with:
@@ -17,12 +25,27 @@ jobs:
         path: target-repo
         fetch-depth: 0
         ref: main
+        persist-credentials: true  # 确保后续步骤使用相同凭证
+
+    - name: Debug: List files after checkout
+      run: |
+        cd target-repo
+        echo "当前目录内容:"
+        ls -la
+        echo "Git 状态:"
+        git status
+        echo "Git 远程信息:"
+        git remote -v
 
     - name: Reset to origin/main
       run: |
         cd target-repo
+        echo "重置前 HEAD:"
+        git log -1 --oneline
         git fetch origin
         git reset --hard origin/main
+        echo "重置后 HEAD:"
+        git log -1 --oneline
         echo "✅ 已重置到 origin/main"
 
     - name: Clone source ddns-go
@@ -30,29 +53,42 @@ jobs:
         git clone --depth 1 https://github.com/474706852/ddns-go.git source-repo
         cd source-repo
         git checkout main
+        echo "源仓库 HEAD:"
+        git log -1 --oneline
 
     - name: Perform full sync
       run: |
+        echo "同步前目标仓库内容:"
+        ls -la target-repo
+        
         # 保留目标仓库的.git目录
         find target-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
         
         # 复制所有文件（包括隐藏文件）
         cp -a source-repo/. target-repo/
+        
+        echo "同步后目标仓库内容:"
+        ls -la target-repo
         echo "✅ 所有文件已从源仓库同步"
 
     - name: Check for changes
       id: check-changes
       run: |
         cd target-repo
+        echo "变更检测前状态:"
+        git status
+        
         git add -A  # 确保所有更改都被暂存
         
-        # 使用 git status 检测变更更可靠
+        # 使用 git status 检测变更
         if [ -z "$(git status --porcelain)" ]; then
-          echo "changes_detected=false" >> $GITHUB_OUTPUT
           echo "🟢 未检测到变更"
+          echo "changes_detected=false" >> $GITHUB_OUTPUT
         else
-          echo "changes_detected=true" >> $GITHUB_OUTPUT
           echo "🟡 检测到变更"
+          echo "变更内容:"
+          git diff --cached --name-status
+          echo "changes_detected=true" >> $GITHUB_OUTPUT
         fi
 
     - name: Commit changes
@@ -61,44 +97,53 @@ jobs:
         cd target-repo
         git config user.name "GitHub Actions Sync"
         git config user.email "actions@github.com"
+        
+        echo "提交前状态:"
+        git status
+        
         git add -A
         git commit -m "Auto-sync: Full update from 474706852/ddns-go @ $(date -u +'%Y-%m-%d %H:%M UTC')"
+        
+        echo "提交后状态:"
+        git log -1 --oneline
         echo "🔵 变更已提交"
 
     - name: Force push changes
       if: steps.check-changes.outputs.changes_detected == 'true'
       run: |
         cd target-repo
+        echo "推送前状态:"
+        git status
         git push origin main --force
         echo "🚀 变更已强制推送到 13ztop/ddns-go"
 
-    - name: Send Telegram notification via curl
+    - name: Debug: Verify push
+      if: steps.check-changes.outputs.changes_detected == 'true'
+      run: |
+        cd target-repo
+        echo "推送后状态:"
+        git log -1 --oneline
+        echo "远程仓库状态:"
+        git ls-remote origin
+
+    - name: Send Telegram notification (Simplified)
       env:
         BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
-        # 创建基本消息（避免特殊字符问题）
-        STATUS="${{ job.status }}"
-        CHANGES="${{ steps.check-changes.outputs.changes_detected == 'true' && '有变更 ✅' || '无变更 ⚪' }}"
-        TRIGGER="${{ github.event_name == 'workflow_dispatch' && '手动触发' || '定时触发' }}"
-        LOG_URL="https://github.com/13ztop/ddns-go/actions/runs/${{ github.run_id }}"
+        # 基本测试消息
+        MESSAGE="GitHub Sync: ddns-go 同步操作完成。状态: ${{ job.status }}"
         
-        # 使用简单的消息格式
-        MESSAGE="🚀 ddns-go 同步完成
-        仓库: 13ztop/ddns-go
-        状态: $STATUS
-        变更: $CHANGES
-        触发方式: $TRIGGER
-        详细日志: $LOG_URL"
-        
-        # 发送请求（使用 POST 方法避免编码问题）
+        # 发送请求
         curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
           -d "chat_id=$CHAT_ID" \
           -d "text=$MESSAGE" \
-          -d "parse_mode=Markdown" > /dev/null
+          -o response.txt
         
-        # 检查结果
-        if [ $? -eq 0 ]; then
+        echo "Telegram API 响应:"
+        cat response.txt
+        
+        if grep -q '"ok":true' response.txt; then
           echo "✅ Telegram 通知已发送"
         else
           echo "❌ Telegram 通知发送失败"
