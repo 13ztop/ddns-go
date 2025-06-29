@@ -36,32 +36,31 @@ jobs:
         done
         echo "✅ 安全同步完成"
     
-    # 5. 验证并修复Git仓库状态
-    - name: Repair Git repository
+    # 5. 验证并修复Git仓库状态（重构版）
+    - name: Repair Git repository if needed
       run: |
         cd target-repo
         
-        # 验证仓库完整性
+        # 检查仓库是否损坏
         if ! git fsck --full --strict; then
           echo "⚠️ 仓库损坏，尝试修复..."
+          # 备份工作区文件（不包括.git目录）
+          cd ..
+          mkdir backup-workspace
+          # 复制target-repo中除.git外的所有内容
+          rsync -a --exclude='.git' target-repo/ backup-workspace/ || true
           
-          # 备份重要文件
-          mkdir -p ../backup
-          find . -type f ! -path './.git/*' -exec cp --parents {} ../backup/ \;
+          # 删除并重新克隆target-repo
+          rm -rf target-repo
+          git clone --depth=1 https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git target-repo
           
-          # 完全重建仓库
-          rm -rf .git
-          git init
-          git remote add origin https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git
-          git fetch --depth=1 origin main
-          git checkout -b main FETCH_HEAD
-          
-          # 恢复文件
-          find ../backup -type f ! -path '../backup/.git/*' -exec cp --parents {} . \;
-          rm -rf ../backup
+          # 将备份的文件覆盖到新克隆的target-repo
+          rsync -a backup-workspace/ target-repo/ || true
+          rm -rf backup-workspace
+          cd target-repo
         fi
         
-        # 确保HEAD有效
+        # 确保仓库状态正常
         git rev-parse HEAD
         git reset --hard
         git clean -f -d
@@ -78,11 +77,10 @@ jobs:
       id: changes
       run: |
         cd target-repo
-        # 使用新方法设置输出
         change_count=$(git status --porcelain | wc -l | tr -d ' ')
         echo "has_changes=$change_count" >> $GITHUB_OUTPUT
         echo "变更数量: $change_count"
-        git status  # 调试输出
+        git status
     
     # 8. 提交变更
     - name: Commit changes
