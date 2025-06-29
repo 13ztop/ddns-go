@@ -16,7 +16,7 @@ jobs:
         repository: 13ztop/ddns-go
         path: target-repo
         ref: main
-        persist-credentials: true  # 关键修复：保持凭证有效
+        persist-credentials: true
 
     - name: Reset to origin/main
       run: |
@@ -30,21 +30,22 @@ jobs:
         cd source-repo
         git checkout main
 
-    - name: Sync files
+    - name: Sync files (FIXED)
       run: |
-        # 删除目标仓库所有文件（保留.git）
-        find target-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+        # 关键修复：复制时排除.git目录
+        rsync -av --delete --exclude='.git' source-repo/ target-repo/
         
-        # 复制源仓库文件
-        cp -a source-repo/. target-repo/
+        # 如果rsync不可用，使用替代方案：
+        # find target-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+        # cp -a source-repo/. target-repo/
+        # rm -rf target-repo/.git  # 确保删除可能残留的.git
 
     - name: Configure Git credentials
       run: |
         cd target-repo
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
-        git config credential.helper "store --file=.git/credentials"
-        echo "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com" > .git/credentials
+        # 已通过persist-credentials保留凭证，无需重复配置
 
     - name: Commit changes
       run: |
