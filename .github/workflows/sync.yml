@@ -72,19 +72,31 @@ jobs:
         git push origin main --force
         echo "🚀 变更已强制推送到 13ztop/ddns-go"
 
-    - name: Send Telegram notification
-      uses: appleboy/telegram-action@v1.0.0  # 使用稳定版本
-      with:
-        to: ${{ secrets.TELEGRAM_CHAT_ID }}
-        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        message: |
-          🚀 *ddns-go 同步完成*
-          - 仓库: [13ztop/ddns-go](https://github.com/13ztop/ddns-go)
-          - 状态: ${{ job.status }}
-          - 变更: ${{ steps.check-changes.outputs.changes_detected == 'true' && '有变更 ✅' || '无变更 ⚪' }}
-          - 触发方式: ${{ github.event_name == 'workflow_dispatch' && '手动触发' || '定时触发' }}
-          - 详细日志: [查看日志](https://github.com/13ztop/ddns-go/actions/runs/${{ github.run_id }})
-        parse_mode: markdown
+    - name: Send Telegram notification via curl
+      env:
+        BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        # 创建消息内容
+        MESSAGE="🚀 *ddns-go 同步完成*
+        - 仓库: [13ztop/ddns-go](https://github.com/13ztop/ddns-go)
+        - 状态: ${{ job.status }}
+        - 变更: ${{ steps.check-changes.outputs.changes_detected == 'true' && '有变更 ✅' || '无变更 ⚪' }}
+        - 触发方式: ${{ github.event_name == 'workflow_dispatch' && '手动触发' || '定时触发' }}
+        - 详细日志: [查看日志](https://github.com/13ztop/ddns-go/actions/runs/${{ github.run_id }})"
+        
+        # URL 编码消息内容
+        ENCODED_MSG=$(echo "$MESSAGE" | sed -e 's/%/%25/g' -e 's/ /%20/g' -e 's/!/%21/g' -e 's/"/%22/g' -e 's/#/%23/g' -e 's/\$/%24/g' -e 's/&/%26/g' -e "s/'/%27/g" -e 's/(/%28/g' -e 's/)/%29/g' -e 's/*/%2A/g' -e 's/+/%2B/g' -e 's/,/%2C/g' -e 's/-/%2D/g' -e 's/\./%2E/g' -e 's/\//%2F/g' -e 's/:/%3A/g' -e 's/;/%3B/g' -e 's//%3E/g' -e 's/?/%3F/g' -e 's/@/%40/g' -e 's/\[/%5B/g' -e 's/\\/%5C/g' -e 's/\]/%5D/g' -e 's/\^/%5E/g' -e 's/_/%5F/g' -e 's/`/%60/g' -e 's/{/%7B/g' -e 's/|/%7C/g' -e 's/}/%7D/g' -e 's/~/%7E/g')
+        
+        # 发送请求
+        curl -s -X GET "https://api.telegram.org/bot$BOT_TOKEN/sendMessage?chat_id=$CHAT_ID&text=$ENCODED_MSG&parse_mode=markdown" > /dev/null
+        
+        # 检查结果
+        if [ $? -eq 0 ]; then
+          echo "✅ Telegram 通知已发送"
+        else
+          echo "❌ Telegram 通知发送失败"
+        fi
 
     - name: Cleanup
       run: rm -rf source-repo
