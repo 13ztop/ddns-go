@@ -5,61 +5,36 @@ on:
     - cron: '0 0 * * *'  # 每天UTC时间0点（北京时间8点）自动同步
   workflow_dispatch:     # 允许手动触发
 
+env:
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-    # 1. 准备工作区
+    # 准备工作区
     - name: Prepare workspace
       run: |
         rm -rf target-repo source-repo
         mkdir -p target-repo source-repo
     
-    # 2. 克隆源仓库
+    # 克隆源仓库
     - name: Clone source repository
       run: |
         git clone --depth=1 https://github.com/474706852/ddns-go.git source-repo
     
-    # 3. 直接克隆目标仓库（使用完整克隆）
+    # 克隆目标仓库
     - name: Clone target repository
       run: |
-        # 使用完整克隆代替浅克隆
         git clone "https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git" target-repo
         cd target-repo
-        git checkout main  # 确保检出正确分支
+        git checkout main
     
-    # 4. 修复仓库状态（关键修复）
-    - name: Repair repository state
-      run: |
-        cd target-repo
-        
-        # 验证并修复HEAD引用
-        if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
-          echo "⚠️ HEAD无效，尝试修复..."
-          
-          # 获取最新commit
-          latest_commit=$(git log -1 --format=%H)
-          
-          # 如果无法获取commit，尝试从远程获取
-          if [ -z "$latest_commit" ]; then
-            git fetch origin main
-            latest_commit=$(git rev-parse origin/main)
-          fi
-          
-          # 重置HEAD
-          echo $latest_commit > .git/HEAD
-        fi
-        
-        # 验证仓库完整性
-        git fsck --full || true
-        git reset --hard
-        git clean -f -d
-    
-    # 5. 安全文件同步
+    # 安全文件同步
     - name: Safe file sync
       run: |
         cd source-repo
-        # 仅更新目标仓库中已存在的文件
         find . -type f | while read -r file; do
           if [ -f "../target-repo/$file" ]; then
             echo "更新文件: $file"
@@ -68,38 +43,38 @@ jobs:
         done
         echo "✅ 安全同步完成"
     
-    # 6. 配置Git用户信息
+    # 配置Git用户信息
     - name: Configure Git
       run: |
         cd target-repo
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
     
-    # 7. 检查变更（使用低级Git命令）
+    # 检查变更（避免依赖HEAD）
     - name: Check for changes
       id: changes
       run: |
         cd target-repo
         
-        # 使用低级命令检测变更
-        git update-index -q --refresh
+        # 获取变更数量
         change_count=0
-        
-        # 检测工作区变更
-        if ! git diff-index --quiet HEAD --; then
-          change_count=$(git diff-index --name-only HEAD -- | wc -l | tr -d ' ')
+        if git status --porcelain > /dev/null 2>&1; then
+          change_count=$(git status --porcelain | wc -l | tr -d ' ')
+        else
+          # 如果git status失败，使用低级命令
+          git update-index -q --refresh
+          change_count=$(git diff-index --name-only HEAD | wc -l | tr -d ' ')
         fi
         
         echo "has_changes=$change_count" >> $GITHUB_OUTPUT
         
         if [ "$change_count" -gt 0 ]; then
           echo "📝 检测到变更 ($change_count 个文件)"
-          git diff-index --name-only HEAD --
         else
           echo "🟢 无变更检测到"
         fi
     
-    # 8. 提交变更（仅在检测到变更时执行）
+    # 提交变更（仅在检测到变更时执行）
     - name: Commit changes
       if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
@@ -108,7 +83,7 @@ jobs:
         git commit -m "安全同步: $(date -u +'%Y-%m-%d %H:%M UTC')"
         echo "✅ 已提交 ${{ steps.changes.outputs.has_changes }} 个变更"
     
-    # 9. 推送变更（仅在检测到变更时执行）
+    # 推送变更（仅在检测到变更时执行）
     - name: Push changes
       if: ${{ steps.changes.outputs.has_changes != '0' }}
       run: |
@@ -116,16 +91,57 @@ jobs:
         git push origin main
         echo "🚀 已成功推送变更到 GitHub"
     
-    # 10. 最终状态报告
-    - name: Final sync report
+    # 准备Telegram通知消息
+    - name: Prepare Telegram message
+      id: telegram-msg
       if: always()
       run: |
-        echo "::notice title=同步报告::🕒 同步完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-        
+        # 确定通知消息
         if [ "${{ steps.changes.outputs.has_changes }}" == "0" ]; then
-          echo "::notice title=同步报告::🟢 无变更需要推送 - 仓库已是最新状态"
+          status="🟢 *无变更需要推送*"
+        elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
+          status="🚀 *已成功推送 ${{ steps.changes.outputs.has_changes }} 个变更*"
+        else
+          status="⚠️ *无法确定变更状态*"
+        fi
+        
+        # 添加时间信息
+        timestamp="🕒 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+        
+        # 添加工作流链接
+        workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        link="🔗 [工作流详情]($workflow_url)"
+        
+        # 组合消息
+        message="*ddns-go 同步报告*%0A%0A$status%0A$timestamp%0A$link"
+        
+        # 设置输出
+        echo "message=$message" >> $GITHUB_OUTPUT
+        echo "::notice::Telegram 消息已准备"
+    
+    # 发送Telegram通知（总是执行）
+    - name: Send Telegram notification
+      if: always() && env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
+      run: |
+        # 发送Telegram通知
+        curl -s -X POST \
+          "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+          -d "chat_id=$TELEGRAM_CHAT_ID" \
+          -d "text=${{ steps.telegram-msg.outputs.message }}" \
+          -d "parse_mode=Markdown" \
+          -d "disable_web_page_preview=true"
+        
+        echo "✅ Telegram 通知已发送"
+    
+    # 备用通知（如果没有配置Telegram）
+    - name: Final status report
+      if: always() && (env.TELEGRAM_BOT_TOKEN == '' || env.TELEGRAM_CHAT_ID == '')
+      run: |
+        if [ "${{ steps.changes.outputs.has_changes }}" == "0" ]; then
+          echo "::notice title=同步报告::🟢 无变更需要推送"
         elif [ "${{ steps.changes.outputs.has_changes }}" != "0" ]; then
           echo "::notice title=同步报告::🚀 已成功推送 ${{ steps.changes.outputs.has_changes }} 个变更"
         else
-          echo "::warning title=同步报告::⚠️ 无法确定变更状态 - 请检查日志"
+          echo "::warning title=同步报告::⚠️ 无法确定变更状态"
         fi
+        echo "🕒 同步完成时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
