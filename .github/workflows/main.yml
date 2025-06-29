@@ -1,0 +1,69 @@
+name: Full Sync ddns-go
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout target repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.SYNC_TOKEN }}
+        repository: 13ztop/ddns-go
+        path: target-repo
+        ref: main
+        persist-credentials: true
+
+    - name: Reset to origin/main
+      run: |
+        cd target-repo
+        git fetch origin
+        git reset --hard origin/main
+        git clean -f -d
+
+    - name: Clone source repository
+      run: |
+        git clone --depth 1 https://github.com/474706852/ddns-go.git source-repo
+        cd source-repo
+        git checkout main
+
+    - name: Sync files
+      run: |
+        # 同步时排除.git和custom目录
+        rsync -av --delete --exclude='.git' --exclude='custom' source-repo/ target-repo/
+
+    - name: Configure Git credentials
+      run: |
+        cd target-repo
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git remote set-url origin https://${{ github.actor }}:${{ secrets.SYNC_TOKEN }}@github.com/13ztop/ddns-go.git
+
+    - name: Check for changes
+      id: changes
+      run: |
+        cd target-repo
+        echo "::set-output name=has_changes::$(git status --porcelain | wc -l | tr -d ' ')"
+
+    - name: Commit changes
+      if: steps.changes.outputs.has_changes != '0'
+      run: |
+        cd target-repo
+        git add -A
+        git commit -m "Auto-sync: $(date -u +'%Y-%m-%d %H:%M UTC')"
+        echo "✅ 变更已提交"
+
+    - name: Push changes
+      if: steps.changes.outputs.has_changes != '0'
+      run: |
+        cd target-repo
+        git push origin main
+        echo "🚀 变更已推送到 GitHub"
+        
+    - name: No changes detected
+      if: steps.changes.outputs.has_changes == '0'
+      run: echo "🟢 无变更可提交"
