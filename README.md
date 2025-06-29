@@ -1,7 +1,7 @@
 # ddns-go
 
 # 下载脚本
-wget -O ddns-go-install.sh https://raw.githubusercontent.com/474706852/ddns-go/refs/heads/main/ddns-go-install.sh
+wgethttps://raw.githubusercontent.com/474706852/ddns-go/refs/heads/main/ddns-go-install.sh
 # 赋予执行权限
 chmod +x ddns-go-install.sh
 # 执行安装
@@ -11,7 +11,7 @@ sudo ./ddns-go-install.sh
 
 1. 支持Ubuntu、Debian和CentOS系统
 2. 自动识别系统架构（x86_64、arm64等）
-3. 默认使用21360端口
+3. 默认使用21360端口，端口自定义
 4. 自动配置开机自启
 5. 包含更新和卸载功能
 
